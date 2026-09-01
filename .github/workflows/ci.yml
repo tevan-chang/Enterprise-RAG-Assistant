@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # 第一階段：pgTAP，DB 原生層 RLS/RBAC 矩陣驗證優先於其他測試跑
+  # 見 docs/spec_v3.1.md §9.2、docs/dev_roadmap_v3.1.md Day 2
+  pgtap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start Supabase
+        run: supabase start
+
+      - name: Run pgTAP tests
+        run: supabase test db
+
+  # 後續階段（Pytest API 合約測試、Playwright E2E）將在對應 Day 完成後補上，
+  # 目前僅保留 pgTAP 這一個 stage（見 roadmap Day 2 DoD：CI pipeline 骨架，
+  # 即使只有這一個 stage）。
