@@ -1,0 +1,26 @@
+# 環境變數（真實值絕不進版控）
+.env
+.env.local
+.env.*.local
+
+# Node / Next.js
+node_modules/
+frontend/.next/
+frontend/out/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+backend/**/__pycache__/
+
+# Supabase local
+supabase/.temp/
+supabase/.branches/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Claude Code 個人本機設定（不共用）
+.claude/settings.local.json

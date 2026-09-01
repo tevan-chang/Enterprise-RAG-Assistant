@@ -1,0 +1,12 @@
+# Skeleton only — Day 10 補實際 service 定義（見 docs/dev_roadmap_v3.1.md）
+# 本地開發用；正式環境走 Vercel（前端）/ Render（後端），見 docs/spec_v3.1.md §16
+version: "3.9"
+
+services:
+  backend:
+    build: ./backend
+    profiles: ["not-yet-implemented"]
+
+  frontend:
+    build: ./frontend
+    profiles: ["not-yet-implemented"]

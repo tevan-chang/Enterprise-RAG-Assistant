@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(supabase *)",
+      "Bash(pytest *)",
+      "Bash(playwright *)",
+      "Bash(docker compose *)",
+      "PowerShell(supabase *)",
+      "PowerShell(pytest *)",
+      "PowerShell(playwright *)",
+      "PowerShell(docker compose *)"
+    ]
+  }
+}
