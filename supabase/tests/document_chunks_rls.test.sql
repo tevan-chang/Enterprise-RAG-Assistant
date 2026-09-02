@@ -6,7 +6,7 @@
 -- 因 document_chunks 沒有 confidentiality/role 相關欄位，只做 tenant isolation + CRUD。
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(9);
+select plan(15);
 
 -- 固定測試資料：先建 tenant_a / tenant_b 各一筆 document，再各掛兩個 chunk
 insert into public.documents (id, tenant_id, file_name)
@@ -87,6 +87,55 @@ select results_eq(
     returning chunk_index$$,
   array[2],
   'CRUD: tenant_a 可以 DELETE 自己租戶的 chunk'
+);
+
+-- ============================================================
+-- Section E：XLSX 欄位（sheet_name / cell_range，見 roadmap Day 4）
+-- 驗證新欄位不繞過既有 tenant isolation 硬邊界，且允許 NULL（PDF chunk 不填這兩欄）
+-- ============================================================
+reset role;
+
+insert into public.documents (id, tenant_id, file_name)
+values ('33333333-3333-3333-3333-333333333333', 'tenant_a', 'a_report.xlsx');
+
+insert into public.document_chunks
+  (document_id, tenant_id, chunk_index, page_number, content, token_count, sheet_name, cell_range)
+values
+  ('33333333-3333-3333-3333-333333333333', 'tenant_a', 0, null, '| 月份 | 營收 |', 20, '營收明細', 'A2:E11');
+
+select has_column('public', 'document_chunks', 'sheet_name', 'schema: document_chunks 有 sheet_name 欄位');
+select has_column('public', 'document_chunks', 'cell_range', 'schema: document_chunks 有 cell_range 欄位');
+
+set local role authenticated;
+set local request.jwt.claims =
+  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_a", "user_role": "viewer"}}';
+
+select results_eq(
+  $$select sheet_name, cell_range from public.document_chunks
+    where document_id = '33333333-3333-3333-3333-333333333333'$$,
+  $$values ('營收明細', 'A2:E11')$$,
+  'XLSX chunk: tenant_a 可讀到自己的 sheet_name/cell_range citation'
+);
+select is(
+  (select page_number from public.document_chunks
+     where document_id = '33333333-3333-3333-3333-333333333333'),
+  null,
+  'XLSX chunk: page_number 允許為 NULL（PDF/XLSX citation 欄位互斥）'
+);
+
+set local request.jwt.claims =
+  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_b", "user_role": "viewer"}}';
+
+select is_empty(
+  $$select * from public.document_chunks where document_id = '33333333-3333-3333-3333-333333333333'$$,
+  'XLSX chunk: tenant_b 看不到 tenant_a 的 XLSX chunk（sheet_name/cell_range 不繞過 tenant isolation）'
+);
+select throws_ok(
+  $$insert into public.document_chunks
+      (document_id, tenant_id, chunk_index, sheet_name, cell_range, content, token_count)
+    values ('33333333-3333-3333-3333-333333333333', 'tenant_a', 99, 'hack', 'A1:A1', 'x', 1)$$,
+  '42501', null,
+  'XLSX chunk: tenant_b 的 session 無法用 tenant_id=tenant_a 冒充寫入 XLSX chunk（WITH CHECK 擋下）'
 );
 
 select * from finish();

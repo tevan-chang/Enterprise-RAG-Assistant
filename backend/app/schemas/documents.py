@@ -18,3 +18,5 @@ class ChunkOut(BaseModel):
     page_number: int | None = None
     content: str
     token_count: int = Field(ge=0)
+    sheet_name: str | None = None
+    cell_range: str | None = None

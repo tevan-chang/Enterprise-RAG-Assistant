@@ -17,6 +17,8 @@ class ChunksRepository:
                 "page_number": chunk.page_number,
                 "content": chunk.content,
                 "token_count": chunk.token_count,
+                "sheet_name": chunk.sheet_name,
+                "cell_range": chunk.cell_range,
             }
             for chunk in chunks
         ]
@@ -25,7 +27,7 @@ class ChunksRepository:
     def list_by_document(self, document_id: str) -> list[dict]:
         resp = (
             self._client.table("document_chunks")
-            .select("chunk_index, page_number, content, token_count")
+            .select("chunk_index, page_number, content, token_count, sheet_name, cell_range")
             .eq("document_id", document_id)
             .order("chunk_index")
             .execute()

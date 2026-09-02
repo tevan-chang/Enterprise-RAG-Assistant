@@ -3,11 +3,15 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, UploadFil
 from app.repositories.chunks_repository import ChunksRepository
 from app.repositories.documents_repository import DocumentsRepository
 from app.schemas.documents import ChunkOut, DocumentStatusResponse, DocumentUploadResponse
-from app.services.document_pipeline import process_pdf_document
+from app.services.document_pipeline import process_pdf_document, process_xlsx_document
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
-_ALLOWED_CONTENT_TYPES = {"application/pdf"}
+_XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_PIPELINE_BY_CONTENT_TYPE = {
+    "application/pdf": process_pdf_document,
+    _XLSX_CONTENT_TYPE: process_xlsx_document,
+}
 
 
 @router.post("/upload", response_model=DocumentUploadResponse)
@@ -16,15 +20,16 @@ async def upload_document(
     file: UploadFile,
     x_tenant_id: str = Header(alias="X-Tenant-Id"),
 ):
-    if file.content_type not in _ALLOWED_CONTENT_TYPES:
-        raise HTTPException(status_code=422, detail="僅支援 PDF 上傳（XLSX 解析見 Day 4）")
+    pipeline = _PIPELINE_BY_CONTENT_TYPE.get(file.content_type)
+    if pipeline is None:
+        raise HTTPException(status_code=422, detail="僅支援 PDF 或 XLSX 上傳")
 
     file_bytes = await file.read()
     documents_repo = DocumentsRepository()
     doc = documents_repo.create(tenant_id=x_tenant_id, file_name=file.filename)
 
     background_tasks.add_task(
-        process_pdf_document,
+        pipeline,
         document_id=doc["id"],
         tenant_id=x_tenant_id,
         file_bytes=file_bytes,

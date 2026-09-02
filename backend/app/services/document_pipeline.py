@@ -4,8 +4,9 @@ from app.adapters.llamaparse_adapter import FallbackParsingError, LlamaParseAdap
 from app.config import settings
 from app.repositories.chunks_repository import ChunksRepository
 from app.repositories.documents_repository import DocumentsRepository
-from app.services.chunker import chunk_pages
+from app.services.chunker import chunk_pages, chunk_plain_text, chunk_xlsx_sheets
 from app.services.pdf_parser import PageText, PDFParsingError, extract_pdf_pages
+from app.services.xlsx_parser import XLSXParsingError, extract_xlsx_sheets
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,32 @@ async def process_pdf_document(document_id: str, tenant_id: str, file_bytes: byt
 
         documents_repo.update_status(document_id, "completed")
     except (PDFParsingError, FallbackParsingError) as exc:
+        logger.error("文件解析失敗（含 fallback）: doc=%s err=%s", document_id, exc)
+        documents_repo.update_status(document_id, "failed")
+    except Exception:
+        logger.exception("文件處理管線發生未預期錯誤: doc=%s", document_id)
+        documents_repo.update_status(document_id, "failed")
+
+
+async def process_xlsx_document(document_id: str, tenant_id: str, file_bytes: bytes, file_name: str) -> None:
+    """BackgroundTasks 派發的 XLSX pipeline：parsing → chunking → completed/failed（見 roadmap Day 4）。"""
+    documents_repo = DocumentsRepository()
+    chunks_repo = ChunksRepository()
+
+    try:
+        try:
+            sheets = extract_xlsx_sheets(file_bytes)
+            documents_repo.update_status(document_id, "chunking")
+            chunks = chunk_xlsx_sheets(sheets, settings.chunk_size_tokens)
+        except XLSXParsingError as exc:
+            logger.warning("pandas 解析失敗，觸發 LlamaParse fallback: doc=%s err=%s", document_id, exc)
+            fallback_text = await LlamaParseAdapter().parse(file_bytes, file_name)
+            documents_repo.update_status(document_id, "chunking")
+            chunks = chunk_plain_text(fallback_text, settings.chunk_size_tokens, settings.chunk_overlap_tokens)
+
+        chunks_repo.bulk_insert(document_id, tenant_id, chunks)
+        documents_repo.update_status(document_id, "completed")
+    except (XLSXParsingError, FallbackParsingError) as exc:
         logger.error("文件解析失敗（含 fallback）: doc=%s err=%s", document_id, exc)
         documents_repo.update_status(document_id, "failed")
     except Exception:
