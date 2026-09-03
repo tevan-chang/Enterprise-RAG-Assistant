@@ -10,6 +10,14 @@
         "--project-ref",
         "tpwurobceaggztorexww"
       ]
+    },
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest"
+      ],
+      "env": {}
     }
   }
 }

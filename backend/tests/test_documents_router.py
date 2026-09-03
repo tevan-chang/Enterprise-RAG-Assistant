@@ -14,6 +14,44 @@ _test_app.include_router(documents.router)
 client = TestClient(_test_app)
 
 
+def test_list_documents_scoped_by_tenant_header():
+    repo = MagicMock()
+    repo.list_by_tenant.return_value = [
+        {
+            "id": "doc-1",
+            "file_name": "a.pdf",
+            "processing_status": "completed",
+            "classification_status": "auto_labeled",
+            "final_categories": ["財務"],
+            "confidentiality": "internal",
+            "updated_at": "2026-09-04T00:00:00+00:00",
+        }
+    ]
+
+    with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
+        resp = client.get("/api/documents", headers={"X-Tenant-Id": "tenant_a"})
+
+    assert resp.status_code == 200
+    assert resp.json() == [
+        {
+            "document_id": "doc-1",
+            "file_name": "a.pdf",
+            "processing_status": "completed",
+            "classification_status": "auto_labeled",
+            "final_categories": ["財務"],
+            "confidentiality": "internal",
+            "updated_at": "2026-09-04T00:00:00+00:00",
+        }
+    ]
+    repo.list_by_tenant.assert_called_once_with("tenant_a")
+
+
+def test_list_documents_without_tenant_header_returns_422():
+    resp = client.get("/api/documents")
+
+    assert resp.status_code == 422
+
+
 def test_reorganize_as_editor_upgrades_to_manually_verified():
     repo = MagicMock()
     repo.reorganize.return_value = {

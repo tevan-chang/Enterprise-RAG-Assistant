@@ -6,6 +6,7 @@ from app.repositories.chunks_repository import ChunksRepository
 from app.repositories.documents_repository import DocumentsRepository
 from app.schemas.documents import (
     ChunkOut,
+    DocumentListItem,
     DocumentStatusResponse,
     DocumentUploadResponse,
     ReorganizeRequest,
@@ -63,6 +64,25 @@ async def upload_document(
     )
 
     return DocumentUploadResponse(document_id=doc["id"], processing_status=doc["processing_status"])
+
+
+@router.get("", response_model=list[DocumentListItem])
+async def list_documents(x_tenant_id: str = Header(alias="X-Tenant-Id")):
+    """文件列表頁用（見 roadmap Day 5 前端串接），依 tenant_id 隔離（同 upload 的 header 慣例）。"""
+    documents_repo = DocumentsRepository()
+    docs = documents_repo.list_by_tenant(x_tenant_id)
+    return [
+        DocumentListItem(
+            document_id=doc["id"],
+            file_name=doc["file_name"],
+            processing_status=doc["processing_status"],
+            classification_status=doc["classification_status"],
+            final_categories=doc["final_categories"],
+            confidentiality=doc["confidentiality"],
+            updated_at=doc["updated_at"],
+        )
+        for doc in docs
+    ]
 
 
 @router.get("/{document_id}/status", response_model=DocumentStatusResponse)

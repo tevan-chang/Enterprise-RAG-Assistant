@@ -13,6 +13,16 @@ class DocumentStatusResponse(BaseModel):
     updated_at: str
 
 
+class DocumentListItem(BaseModel):
+    document_id: str
+    file_name: str
+    processing_status: str
+    classification_status: str
+    final_categories: list[str]
+    confidentiality: str
+    updated_at: str
+
+
 class ChunkOut(BaseModel):
     chunk_index: int
     page_number: int | None = None

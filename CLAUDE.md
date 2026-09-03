@@ -89,6 +89,15 @@ docs/
 
 ---
 
+## 5.1 每日收尾檢查清單
+
+- [ ] 今天的 code 有沒有出現本檔 §2/§3 明確禁止的模式（BM25 邏輯、DOCX/PPTX 解析、SSE 用在非 Chat 端點、Playwright 覆蓋到 Chat/Report/Gmail、應用內常駐 Scheduler、Gmail 憑證硬編碼、Pydantic v1 語法）
+- [ ] 涉及 pgvector/RLS/BackgroundTasks/Next.js App Router/Gmail API 的程式碼，生成前有沒有先查 Context7
+- [ ] 今天的架構決策是否值得寫一篇 ADR
+- [ ] 今天寫的 code 能不能在面試中用一句話講清楚「為什麼這樣做」
+
+---
+
 ## 6. 回答模式
 
 被問及功能實作時，依序執行：
