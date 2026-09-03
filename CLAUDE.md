@@ -109,3 +109,55 @@ docs/
 1. 指出違反的是本檔第幾條 Guardrail（§2 或 §3）
 2. 對照 `docs/spec_v3.1.md` 的對應章節說明原始理由
 3. 主動提出符合**當前 roadmap Day 範疇**的替代方案
+
+---
+
+## 8. 開發指令
+
+**Backend**（於 `backend/` 目錄下執行）：
+
+```bash
+pip install -r requirements.txt
+
+pytest                                                    # 跑全部測試
+pytest tests/test_document_pipeline.py                    # 跑單一檔案
+pytest tests/test_document_pipeline.py::test_process_pdf_document_triggers_fallback_on_parsing_error  # 跑單一測試
+
+uvicorn app.main:app --reload                              # 本地啟動 API
+```
+
+- `pytest.ini` 已設 `pythonpath = .` 與 `asyncio_mode = auto`，async test 不需額外裝飾。
+- 設定讀取來自 **`backend/.env`**（`app/config.py` 的 `SettingsConfigDict(env_file=".env")` 是相對 cwd），跟 repo 根目錄的 `.env` 是兩個獨立檔案，兩邊都要顧到（根目錄 `.env` 目前存放的是 Supabase Cloud/Gmail 等正式環境憑證）。
+- `tests/test_llamaparse_fallback_live.py` 會打真實 LlamaParse API，只有設定 `LLAMA_CLOUD_API_KEY` 時才會執行，否則自動 skip（`pytestmark = pytest.mark.skipif(...)`）。
+
+**Supabase**（於 repo 根目錄執行）：
+
+```bash
+supabase start                    # 啟動本地 stack（Postgres/Auth/Storage...）
+supabase status                   # 看本地服務網址與金鑰
+supabase migration up --local     # 把新 migration 套用到本地 DB
+supabase test db                  # 跑 pgTAP（supabase/tests/*.test.sql）
+supabase migration list           # 比對本地 vs 遠端 migration 差異
+supabase db push --dry-run        # 預覽會推到遠端 Supabase Cloud 的 SQL（先看再決定）
+supabase db push                  # 正式套用到遠端（會改動雲端 schema，執行前務必先 dry-run 確認）
+```
+
+**CI**：`.github/workflows/ci.yml` 目前只有 `pgtap` 一個 stage（見 roadmap Day 2 DoD：CI 骨架先跑通這一階段），Pytest/Playwright stage 待對應 Day 完成後補上。
+
+**Frontend / Docker Compose**：尚未實作。`frontend/` 目前只有 `.gitkeep`；`docker-compose.yml` 是 skeleton，兩個 service 都用 `profiles: ["not-yet-implemented"]` 佔位，實際定義排在 roadmap Day 10。
+
+---
+
+## 9. 架構總覽（跨檔案資料流）
+
+**分層**：`routers/`（FastAPI 端點，含 RBAC/驗證）→ `services/`（業務邏輯與 pipeline）→ `repositories/`（Supabase table 存取）與 `adapters/`（外部服務或可替換策略，如 `LlamaParseAdapter`、`DenseRetriever`）→ `schemas/`（Pydantic request/response）。`repositories/` 一律透過 `app/db.py` 的 `get_supabase_client()` 用 **service_role key** 連線（bypass RLS），因此 role-based/confidentiality 過濾**必須**在 Python 層做，不能假設 DB 會擋（見下方雙層權限隔離）。
+
+**文件上傳解析管線**（`services/document_pipeline.py`）：`documents.processing_status` 狀態機為 `parsing → chunking → embedding → completed/failed`，供前端 Polling 與 `lifespan` zombie task cleanup 判斷用。PDF 走 `pdf_parser.py`（pdfplumber）、XLSX 走 `xlsx_parser.py`（pandas），任一解析失敗都會 fallback 到 `LlamaParseAdapter`。兩條 pipeline chunking 完成後都收斂到共用尾段 `_embed_and_store_chunks`：先呼叫 `services/embeddings.py`（OpenAI native SDK，`text-embedding-3-small`）取得向量，成功才透過 `ChunksRepository.bulk_insert` 把 chunk（含 embedding）寫入 `document_chunks`；embedding API 失敗會直接標記文件 `failed`，不留下沒有向量、DenseRetriever 永遠檢索不到的殘影 chunk。
+
+**Zombie task cleanup**（`services/zombie_cleanup.py`）：只在 FastAPI `lifespan` 啟動時跑一次（見 `main.py`），不是常駐排程；把卡在 `parsing`/`chunking`/`embedding` 且 `updated_at` 超過 timeout 的文件標記 `failed`，防止 `BackgroundTasks` 容器崩潰造成前端無限 Polling。
+
+**檢索**（`adapters/retrievers.py`）：`DenseRetriever` 是 `BaseRetriever` 唯一實作，把「產生 query embedding」與 `ChunksRepository.match()` 串起來。`match()` 呼叫 Postgres RPC `match_document_chunks`（見 `supabase/migrations/20260903120000_match_document_chunks_function.sql`），Metadata Filter（`tenant_id` 必要、`departments`/`confidentiality` 可選）在 SQL function 內部套用、跟 pgvector cosine 排序一起執行——不可在 Python 端用 `.eq()` 事後過濾，否則 planner 無法把 filter 跟向量排序一起最佳化，selective filter 還可能讓 top-k 少於預期筆數。`RRFFusionRetriever` 依 Guardrail #2 只以註解形式存在。
+
+**雙層權限隔離**：`tenant_id` 是硬邊界，交給 Supabase RLS（`documents_rls_policies.sql`），用 pgTAP（`supabase/tests/*.test.sql`）驗證；role-based/confidentiality 過濾是業務規則，留在 FastAPI Query 層（`routers/documents.py` 的 `_require_role` header dependency、`DenseRetriever.retrieve()` 的 `role` 參數），一律用 Pytest + mock repo 驗證（見 Guardrail #6：禁止 Python 直連 DB 測試）。
+
+**雙軌分類鎖**（`documents.classification_status`）：`pending_auto → auto_labeled → manually_verified`。`DocumentsRepository.reorganize()` 升級為 `manually_verified`，`unlock_bulk()`（限 Admin）降級回 `auto_labeled`；`services/classification.py` 的 `on_file_reupload()` 處理「內容變更但已鎖定」的情況——雜湊不符且原狀態為 `manually_verified` 時觸發 `flag_for_review`（目前為 log 佔位，待 Day 9-10 接 Gmail 通知），刻意不自動解鎖。
