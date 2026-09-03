@@ -24,3 +24,9 @@ Thumbs.db
 
 # Claude Code 個人本機設定（不共用）
 .claude/settings.local.json
+
+# 開發路線圖（僅本機參考，不進版控）
+docs/dev_roadmap_v3.1.md
+
+# spec 補充版本（含取捨論述與個人背景整理，僅本機參考，不進版控）
+docs/spec_v3.1.local.md
