@@ -5,7 +5,7 @@
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -33,12 +33,16 @@ async def test_llamaparse_adapter_parses_real_pdf_via_live_api():
 
 
 async def test_process_pdf_document_completes_via_real_llamaparse_fallback():
+    """只驗證 LlamaParse fallback 這段真實 API；embedding 仍 mock 掉，
+    避免這支測試同時依賴 OPENAI_API_KEY（不在本測試 scope 內）。
+    """
     file_bytes = _TEST_PDF.read_bytes()
 
     with (
         patch(f"{_MODULE}.DocumentsRepository") as MockDocumentsRepo,
         patch(f"{_MODULE}.ChunksRepository") as MockChunksRepo,
         patch(f"{_MODULE}.extract_pdf_pages", side_effect=PDFParsingError("模擬原生解析異常")),
+        patch(f"{_MODULE}.embed_texts", new=AsyncMock(side_effect=lambda texts: [[0.0] * 3 for _ in texts])),
     ):
         documents_repo = MockDocumentsRepo.return_value
         chunks_repo = MockChunksRepo.return_value

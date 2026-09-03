@@ -9,12 +9,11 @@ class DocumentsRepository:
     def __init__(self):
         self._client = get_supabase_client()
 
-    def create(self, tenant_id: str, file_name: str) -> dict:
-        resp = (
-            self._client.table("documents")
-            .insert({"tenant_id": tenant_id, "file_name": file_name, "processing_status": "parsing"})
-            .execute()
-        )
+    def create(self, tenant_id: str, file_name: str, file_content_hash: str | None = None) -> dict:
+        row = {"tenant_id": tenant_id, "file_name": file_name, "processing_status": "parsing"}
+        if file_content_hash is not None:
+            row["file_content_hash"] = file_content_hash
+        resp = self._client.table("documents").insert(row).execute()
         return resp.data[0]
 
     def get(self, document_id: str) -> dict | None:
@@ -46,3 +45,42 @@ class DocumentsRepository:
         self._client.table("documents").update({"processing_status": "failed"}).in_(
             "id", document_ids
         ).execute()
+
+    def reorganize(self, document_id: str, manual_categories: list[str]) -> dict | None:
+        """手動整理：寫入 manual_categories，final_categories 以人工結果為準，
+        狀態鎖升級為 manually_verified（見 spec §4.2 雙軌分類鎖機制）。
+        """
+        resp = (
+            self._client.table("documents")
+            .update(
+                {
+                    "manual_categories": manual_categories,
+                    "final_categories": manual_categories,
+                    "classification_status": "manually_verified",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            .eq("id", document_id)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def unlock_bulk(self, document_ids: list[str]) -> list[dict]:
+        """批次解鎖：僅對目前已鎖定（manually_verified）的文件生效，狀態鎖降級為
+        auto_labeled，讓背景自動分類排程可以重新覆蓋（見 spec §4.2）。
+        """
+        if not document_ids:
+            return []
+        resp = (
+            self._client.table("documents")
+            .update(
+                {
+                    "classification_status": "auto_labeled",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            .in_("id", document_ids)
+            .eq("classification_status", "manually_verified")
+            .execute()
+        )
+        return resp.data or []

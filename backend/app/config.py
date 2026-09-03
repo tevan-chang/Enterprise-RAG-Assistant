@@ -8,12 +8,16 @@ class Settings(BaseSettings):
     supabase_service_role_key: str = ""
 
     llama_cloud_api_key: str = ""
+    openai_api_key: str = ""
 
     chunk_size_tokens: int = 500
     chunk_overlap_tokens: int = 100
     embedding_model: str = "text-embedding-3-small"
+    embedding_dimensions: int = 1536
 
     zombie_task_timeout_minutes: int = 10
+
+    retrieval_top_k: int = 5
 
 
 settings = Settings()

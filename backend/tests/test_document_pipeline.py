@@ -14,12 +14,18 @@ def _final_status(documents_repo: MagicMock) -> str:
     return documents_repo.update_status.call_args_list[-1].args[1]
 
 
+def _mock_embed_texts():
+    """回傳與輸入等長的假向量，避免測試打真實 OpenAI API（見 test_embeddings.py 才是驗證 embed_texts 本身）。"""
+    return AsyncMock(side_effect=lambda texts: [[0.0] * 3 for _ in texts])
+
+
 async def test_process_pdf_document_triggers_fallback_on_parsing_error():
     with (
         patch(f"{_MODULE}.DocumentsRepository") as MockDocumentsRepo,
         patch(f"{_MODULE}.ChunksRepository") as MockChunksRepo,
         patch(f"{_MODULE}.extract_pdf_pages", side_effect=PDFParsingError("boom")) as mock_extract,
         patch(f"{_MODULE}.LlamaParseAdapter") as MockAdapter,
+        patch(f"{_MODULE}.embed_texts", new=_mock_embed_texts()),
     ):
         documents_repo, chunks_repo = MockDocumentsRepo.return_value, MockChunksRepo.return_value
         MockAdapter.return_value.parse = AsyncMock(return_value="fallback markdown content")
@@ -43,6 +49,7 @@ async def test_process_pdf_document_skips_fallback_when_parsing_succeeds():
             return_value=[PageText(page_number=1, text="normal parsed text")],
         ),
         patch(f"{_MODULE}.LlamaParseAdapter") as MockAdapter,
+        patch(f"{_MODULE}.embed_texts", new=_mock_embed_texts()),
     ):
         documents_repo = MockDocumentsRepo.return_value
         MockAdapter.return_value.parse = AsyncMock()
@@ -79,6 +86,7 @@ async def test_process_xlsx_document_triggers_fallback_on_parsing_error():
         patch(f"{_MODULE}.ChunksRepository") as MockChunksRepo,
         patch(f"{_MODULE}.extract_xlsx_sheets", side_effect=XLSXParsingError("boom")) as mock_extract,
         patch(f"{_MODULE}.LlamaParseAdapter") as MockAdapter,
+        patch(f"{_MODULE}.embed_texts", new=_mock_embed_texts()),
     ):
         documents_repo, chunks_repo = MockDocumentsRepo.return_value, MockChunksRepo.return_value
         MockAdapter.return_value.parse = AsyncMock(return_value="fallback markdown content")
@@ -99,6 +107,7 @@ async def test_process_xlsx_document_skips_fallback_when_parsing_succeeds():
         patch(f"{_MODULE}.ChunksRepository") as MockChunksRepo,
         patch(f"{_MODULE}.extract_xlsx_sheets", return_value=[_sheet_frame()]),
         patch(f"{_MODULE}.LlamaParseAdapter") as MockAdapter,
+        patch(f"{_MODULE}.embed_texts", new=_mock_embed_texts()),
     ):
         documents_repo = MockDocumentsRepo.return_value
         MockAdapter.return_value.parse = AsyncMock()

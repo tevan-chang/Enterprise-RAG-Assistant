@@ -16,6 +16,7 @@ class Chunk:
     token_count: int
     sheet_name: str | None = None
     cell_range: str | None = None
+    embedding: list[float] | None = None
 
 
 def chunk_pages(pages: list[PageText], chunk_size: int = 500, overlap: int = 100) -> list[Chunk]:
