@@ -43,6 +43,17 @@ class ChunkMatch(BaseModel):
     similarity: float
 
 
+class CitationDetailResponse(BaseModel):
+    """Citation 跳轉 API 回應（見 roadmap Day 7）：PDF 用 page_number，XLSX 用 sheet_name+cell_range 定位。"""
+
+    document_id: str
+    file_name: str
+    page_number: int | None = None
+    sheet_name: str | None = None
+    cell_range: str | None = None
+    content: str
+
+
 class ReorganizeRequest(BaseModel):
     document_id: str
     manual_categories: list[str] = Field(min_length=1)

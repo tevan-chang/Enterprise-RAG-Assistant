@@ -131,3 +131,138 @@ def test_unlock_without_role_header_returns_422():
     resp = client.post("/api/documents/unlock", json={"document_ids": ["doc-1"]})
 
     assert resp.status_code == 422
+
+
+def _fake_doc(**overrides):
+    doc = {
+        "id": "doc-1",
+        "tenant_id": "tenant_a",
+        "file_name": "財報.pdf",
+        "confidentiality": "internal",
+    }
+    doc.update(overrides)
+    return doc
+
+
+def test_get_citation_by_page_number_returns_joined_chunk_content():
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = _fake_doc()
+    chunks_repo = MagicMock()
+    chunks_repo.list_by_location.return_value = [
+        {"chunk_index": 0, "content": "第一段"},
+        {"chunk_index": 1, "content": "第二段"},
+    ]
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo),
+        patch(f"{_MODULE}.ChunksRepository", return_value=chunks_repo),
+    ):
+        resp = client.get(
+            "/api/documents/doc-1/citation",
+            params={"page_number": 3},
+            headers={"X-Tenant-Id": "tenant_a", "X-User-Role": "admin"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "document_id": "doc-1",
+        "file_name": "財報.pdf",
+        "page_number": 3,
+        "sheet_name": None,
+        "cell_range": None,
+        "content": "第一段\n\n第二段",
+    }
+    chunks_repo.list_by_location.assert_called_once_with(
+        "doc-1", page_number=3, sheet_name=None, cell_range=None
+    )
+
+
+def test_get_citation_by_sheet_and_cell_range():
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = _fake_doc(file_name="2026Q2.xlsx")
+    chunks_repo = MagicMock()
+    chunks_repo.list_by_location.return_value = [{"chunk_index": 0, "content": "B2:D15 內容"}]
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo),
+        patch(f"{_MODULE}.ChunksRepository", return_value=chunks_repo),
+    ):
+        resp = client.get(
+            "/api/documents/doc-1/citation",
+            params={"sheet_name": "營收明細", "cell_range": "B2:D15"},
+            headers={"X-Tenant-Id": "tenant_a", "X-User-Role": "admin"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["content"] == "B2:D15 內容"
+
+
+def test_get_citation_without_location_params_returns_422():
+    resp = client.get(
+        "/api/documents/doc-1/citation",
+        headers={"X-Tenant-Id": "tenant_a", "X-User-Role": "admin"},
+    )
+
+    assert resp.status_code == 422
+
+
+def test_get_citation_cross_tenant_returns_404():
+    """documents repo 用 service_role key bypass RLS，tenant 隔離必須在這層擋（見 CLAUDE.md 雙層權限隔離）。"""
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = _fake_doc(tenant_id="tenant_b")
+
+    with patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo):
+        resp = client.get(
+            "/api/documents/doc-1/citation",
+            params={"page_number": 3},
+            headers={"X-Tenant-Id": "tenant_a", "X-User-Role": "admin"},
+        )
+
+    assert resp.status_code == 404
+
+
+def test_get_citation_missing_document_returns_404():
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = None
+
+    with patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo):
+        resp = client.get(
+            "/api/documents/missing/citation",
+            params={"page_number": 3},
+            headers={"X-Tenant-Id": "tenant_a", "X-User-Role": "admin"},
+        )
+
+    assert resp.status_code == 404
+
+
+def test_get_citation_as_viewer_on_restricted_document_returns_403():
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = _fake_doc(confidentiality="restricted")
+
+    with patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo):
+        resp = client.get(
+            "/api/documents/doc-1/citation",
+            params={"page_number": 3},
+            headers={"X-Tenant-Id": "tenant_a", "X-User-Role": "viewer"},
+        )
+
+    assert resp.status_code == 403
+
+
+def test_get_citation_no_matching_chunks_returns_404():
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = _fake_doc()
+    chunks_repo = MagicMock()
+    chunks_repo.list_by_location.return_value = []
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo),
+        patch(f"{_MODULE}.ChunksRepository", return_value=chunks_repo),
+    ):
+        resp = client.get(
+            "/api/documents/doc-1/citation",
+            params={"page_number": 99},
+            headers={"X-Tenant-Id": "tenant_a", "X-User-Role": "admin"},
+        )
+
+    assert resp.status_code == 404

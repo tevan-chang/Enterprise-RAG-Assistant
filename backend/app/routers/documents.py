@@ -2,10 +2,12 @@ import hashlib
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, UploadFile
 
+from app.adapters.retrievers import VIEWER_ALLOWED_CONFIDENTIALITY
 from app.repositories.chunks_repository import ChunksRepository
 from app.repositories.documents_repository import DocumentsRepository
 from app.schemas.documents import (
     ChunkOut,
+    CitationDetailResponse,
     DocumentListItem,
     DocumentStatusResponse,
     DocumentUploadResponse,
@@ -104,6 +106,48 @@ async def get_document_status(document_id: str):
 async def get_document_chunks(document_id: str):
     chunks_repo = ChunksRepository()
     return chunks_repo.list_by_document(document_id)
+
+
+@router.get("/{document_id}/citation", response_model=CitationDetailResponse)
+async def get_citation(
+    document_id: str,
+    x_tenant_id: str = Header(alias="X-Tenant-Id"),
+    x_user_role: str = Header(alias="X-User-Role"),
+    page_number: int | None = None,
+    sheet_name: str | None = None,
+    cell_range: str | None = None,
+):
+    """Citation 跳轉 API（見 roadmap Day 7）：依 PDF page_number 或 XLSX sheet_name+cell_range
+    取回對應原文片段，供前端點擊 Chat citation 標籤後在 Modal 顯示。
+
+    `repositories/` 一律用 service_role key bypass RLS（見 CLAUDE.md 雙層權限隔離），
+    tenant_id 與 viewer confidentiality 過濾因此必須在這層做，不能只靠 DB。
+    """
+    if page_number is None and not (sheet_name and cell_range):
+        raise HTTPException(status_code=422, detail="需提供 page_number，或 sheet_name+cell_range")
+
+    documents_repo = DocumentsRepository()
+    doc = documents_repo.get(document_id)
+    if doc is None or doc["tenant_id"] != x_tenant_id:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    if x_user_role == "viewer" and doc["confidentiality"] not in VIEWER_ALLOWED_CONFIDENTIALITY:
+        raise HTTPException(status_code=403, detail="權限不足")
+
+    chunks_repo = ChunksRepository()
+    chunks = chunks_repo.list_by_location(
+        document_id, page_number=page_number, sheet_name=sheet_name, cell_range=cell_range
+    )
+    if not chunks:
+        raise HTTPException(status_code=404, detail="查無對應內容")
+
+    return CitationDetailResponse(
+        document_id=document_id,
+        file_name=doc["file_name"],
+        page_number=page_number,
+        sheet_name=sheet_name,
+        cell_range=cell_range,
+        content="\n\n".join(chunk["content"] for chunk in chunks),
+    )
 
 
 @router.post("/reorganize", response_model=ReorganizeResponse, dependencies=[Depends(_require_role(_EDITOR_ROLES))])

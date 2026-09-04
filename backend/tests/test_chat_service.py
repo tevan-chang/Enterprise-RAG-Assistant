@@ -53,6 +53,7 @@ async def test_stream_chat_response_yields_message_and_done_events():
     retriever.retrieve = AsyncMock(
         return_value=[
             {
+                "document_id": "doc-1",
                 "file_name": "財報.pdf",
                 "page_number": 3,
                 "sheet_name": None,
@@ -73,12 +74,56 @@ async def test_stream_chat_response_yields_message_and_done_events():
         )
 
     assert events == [
+        'event: citations\ndata: {"citations": [{"label": "財報.pdf，第 3 頁", '
+        '"document_id": "doc-1", "file_name": "財報.pdf", "page_number": 3, '
+        '"sheet_name": null, "cell_range": null}]}\n\n',
         'event: message\ndata: {"delta": "你好"}\n\n',
         'event: message\ndata: {"delta": "，世界"}\n\n',
         "event: done\ndata: {}\n\n",
     ]
     retriever.retrieve.assert_called_once_with(
         query="測試問題", tenant_id="tenant_a", top_k=5, departments=None, role="admin"
+    )
+
+
+async def test_stream_chat_response_dedupes_citations_and_formats_xlsx_label():
+    """同一 sheet+cell_range 若被切成多個 chunk 命中，citations 事件應去重（見 roadmap Day 7）。"""
+    retriever = MagicMock()
+    retriever.retrieve = AsyncMock(
+        return_value=[
+            {
+                "document_id": "doc-2",
+                "file_name": "2026Q2.xlsx",
+                "page_number": None,
+                "sheet_name": "營收明細",
+                "cell_range": "B2:D15",
+                "content": "第一段",
+            },
+            {
+                "document_id": "doc-2",
+                "file_name": "2026Q2.xlsx",
+                "page_number": None,
+                "sheet_name": "營收明細",
+                "cell_range": "B2:D15",
+                "content": "第二段",
+            },
+        ]
+    )
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_FakeStream(["回答"]))
+
+    with (
+        patch(f"{_MODULE}.DenseRetriever", return_value=retriever),
+        patch(f"{_MODULE}._get_client", return_value=client),
+    ):
+        events = await _collect(
+            stream_chat_response(query="測試問題", tenant_id="tenant_a", role="admin")
+        )
+
+    assert events[0] == (
+        'event: citations\ndata: {"citations": [{"label": "2026Q2.xlsx，工作表：營收明細 B2:D15", '
+        '"document_id": "doc-2", "file_name": "2026Q2.xlsx", "page_number": null, '
+        '"sheet_name": "營收明細", "cell_range": "B2:D15"}]}\n\n'
     )
 
 

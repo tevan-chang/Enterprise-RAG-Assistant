@@ -4,8 +4,9 @@ from app.config import settings
 from app.repositories.chunks_repository import ChunksRepository
 from app.services.embeddings import embed_texts
 
-# Viewer 檢索時自動排除 restricted 機密等級（見 spec §3.3）；Admin/Editor 不受此限制。
-_VIEWER_ALLOWED_CONFIDENTIALITY = ["public", "internal"]
+# Viewer 檢索/Citation 存取時自動排除 restricted 機密等級（見 spec §3.3）；
+# Admin/Editor 不受此限制。documents router 的 citation 端點也重用此常數（見 roadmap Day 7）。
+VIEWER_ALLOWED_CONFIDENTIALITY = ["public", "internal"]
 
 
 class BaseRetriever(ABC):
@@ -32,7 +33,7 @@ class DenseRetriever(BaseRetriever):
         departments: list[str] | None = None,
         role: str = "admin",
     ) -> list[dict]:
-        confidentiality = _VIEWER_ALLOWED_CONFIDENTIALITY if role == "viewer" else None
+        confidentiality = VIEWER_ALLOWED_CONFIDENTIALITY if role == "viewer" else None
 
         [query_embedding] = await embed_texts([query])
         return self._chunks_repo.match(

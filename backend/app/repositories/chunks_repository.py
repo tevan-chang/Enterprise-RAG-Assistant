@@ -35,6 +35,33 @@ class ChunksRepository:
         )
         return resp.data or []
 
+    def list_by_location(
+        self,
+        document_id: str,
+        page_number: int | None = None,
+        sheet_name: str | None = None,
+        cell_range: str | None = None,
+    ) -> list[dict]:
+        """Citation 跳轉 API 用：依 document_id + 定位條件撈出對應 chunk 內容
+        （PDF 用 page_number；XLSX 用 sheet_name + cell_range，見 roadmap Day 7）。
+
+        依 chunk_index 排序，因同一頁/同一 cell range 可能被切成多個 chunk。
+        """
+        query = (
+            self._client.table("document_chunks")
+            .select("chunk_index, page_number, content, token_count, sheet_name, cell_range")
+            .eq("document_id", document_id)
+        )
+        if page_number is not None:
+            query = query.eq("page_number", page_number)
+        if sheet_name is not None:
+            query = query.eq("sheet_name", sheet_name)
+        if cell_range is not None:
+            query = query.eq("cell_range", cell_range)
+
+        resp = query.order("chunk_index").execute()
+        return resp.data or []
+
     def match(
         self,
         query_embedding: list[float],
