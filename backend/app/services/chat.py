@@ -14,6 +14,8 @@ _SYSTEM_PROMPT = (
     "你是企業內部知識助理，只能根據下方提供的「檢索內容」回答使用者問題。"
     "若檢索內容不足以回答問題，必須明確回答「目前查無相關資料，無法回答」，"
     "禁止臆測、編造或使用檢索內容以外的知識作答。"
+    "回答中每個引用自檢索內容的陳述，句尾都要附上該段檢索內容提供的「[來源：...]」標籤，"
+    "標籤文字須與檢索內容中的標籤完全一致，不可自行改寫或省略。"
 )
 
 
@@ -22,18 +24,46 @@ def _get_client() -> AsyncOpenAI:
     return AsyncOpenAI(api_key=settings.openai_api_key)
 
 
+def _citation_label(chunk: dict) -> str:
+    """組出 `[來源：...]` 標籤內文，同時供 prompt context 與 citations SSE 事件使用，
+    確保前端能用同一段文字比對出訊息裡的 citation 標籤對應哪筆結構化資料。
+    """
+    if chunk.get("sheet_name"):
+        return f"{chunk['file_name']}，工作表：{chunk['sheet_name']} {chunk.get('cell_range') or ''}".strip()
+    return f"{chunk['file_name']}，第 {chunk.get('page_number')} 頁"
+
+
 def _format_context(chunks: list[dict]) -> str:
     if not chunks:
         return "（本次查詢沒有檢索到任何相關文件內容）"
 
-    blocks = []
-    for chunk in chunks:
-        if chunk.get("sheet_name"):
-            source = f"{chunk['file_name']}，工作表：{chunk['sheet_name']} {chunk.get('cell_range') or ''}".strip()
-        else:
-            source = f"{chunk['file_name']}，第 {chunk.get('page_number')} 頁"
-        blocks.append(f"[來源：{source}]\n{chunk['content']}")
+    blocks = [f"[來源：{_citation_label(chunk)}]\n{chunk['content']}" for chunk in chunks]
     return "\n\n".join(blocks)
+
+
+def _build_citations(chunks: list[dict]) -> list[dict]:
+    """去重後的 citation 結構化列表（見 roadmap Day 7 Citation 跳轉 API）：
+    `label` 與 prompt context 裡的 `[來源：...]` 標籤文字完全一致，前端靠這個欄位比對訊息中
+    出現的標籤，再用 document_id + page_number/sheet_name+cell_range 打 Citation 跳轉 API。
+    """
+    seen: set[str] = set()
+    citations = []
+    for chunk in chunks:
+        label = _citation_label(chunk)
+        if label in seen:
+            continue
+        seen.add(label)
+        citations.append(
+            {
+                "label": label,
+                "document_id": chunk["document_id"],
+                "file_name": chunk["file_name"],
+                "page_number": chunk.get("page_number"),
+                "sheet_name": chunk.get("sheet_name"),
+                "cell_range": chunk.get("cell_range"),
+            }
+        )
+    return citations
 
 
 def _build_messages(query: str, chunks: list[dict]) -> list[dict]:
@@ -57,6 +87,7 @@ async def stream_chat_response(
     """`POST /api/query` 用：檢索 → 組 prompt → OpenAI stream=True 逐段轉成 SSE 事件（見 roadmap Day 6）。
 
     SSE 僅限本端點使用（見 CLAUDE.md Guardrail #3），事件格式：
+    - event: citations → data: {"citations": [...]}（見 roadmap Day 7，檢索到內容時才送出，早於 message）
     - event: message → data: {"delta": "<文字片段>"}
     - event: error   → data: {"message": "<錯誤訊息>"}（發生後即結束串流）
     - event: done    → data: {}（正常結束時的最後一個事件）
@@ -69,6 +100,9 @@ async def stream_chat_response(
         logger.exception("Chat 檢索失敗")
         yield _sse_event("error", {"message": f"檢索失敗：{exc}"})
         return
+
+    if chunks:
+        yield _sse_event("citations", {"citations": _build_citations(chunks)})
 
     try:
         stream = await _get_client().chat.completions.create(
