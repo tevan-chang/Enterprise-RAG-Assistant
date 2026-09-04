@@ -20,6 +20,16 @@ class DocumentsRepository:
         resp = self._client.table("documents").select("*").eq("id", document_id).limit(1).execute()
         return resp.data[0] if resp.data else None
 
+    def list_by_tenant(self, tenant_id: str) -> list[dict]:
+        resp = (
+            self._client.table("documents")
+            .select("*")
+            .eq("tenant_id", tenant_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return resp.data or []
+
     def update_status(self, document_id: str, processing_status: str) -> None:
         self._client.table("documents").update(
             {

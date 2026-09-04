@@ -89,6 +89,15 @@ docs/
 
 ---
 
+## 5.1 每日收尾檢查清單
+
+- [ ] 今天的 code 有沒有出現本檔 §2/§3 明確禁止的模式（BM25 邏輯、DOCX/PPTX 解析、SSE 用在非 Chat 端點、Playwright 覆蓋到 Chat/Report/Gmail、應用內常駐 Scheduler、Gmail 憑證硬編碼、Pydantic v1 語法）
+- [ ] 涉及 pgvector/RLS/BackgroundTasks/Next.js App Router/Gmail API 的程式碼，生成前有沒有先查 Context7
+- [ ] 今天的架構決策是否值得寫一篇 ADR
+- [ ] 今天寫的 code 能不能在面試中用一句話講清楚「為什麼這樣做」
+
+---
+
 ## 6. 回答模式
 
 被問及功能實作時，依序執行：
@@ -144,7 +153,19 @@ supabase db push                  # 正式套用到遠端（會改動雲端 sche
 
 **CI**：`.github/workflows/ci.yml` 目前只有 `pgtap` 一個 stage（見 roadmap Day 2 DoD：CI 骨架先跑通這一階段），Pytest/Playwright stage 待對應 Day 完成後補上。
 
-**Frontend / Docker Compose**：尚未實作。`frontend/` 目前只有 `.gitkeep`；`docker-compose.yml` 是 skeleton，兩個 service 都用 `profiles: ["not-yet-implemented"]` 佔位，實際定義排在 roadmap Day 10。
+**Frontend**（於 `frontend/` 目錄下執行；Day 5 起已串接文件上傳/列表頁）：
+
+```bash
+npm install
+npm run dev      # 本地啟動（預設 http://localhost:3000）
+npm run lint     # next lint
+npm run build    # 正式建置
+```
+
+- 設定讀取來自 `frontend/.env.local`（`NEXT_PUBLIC_API_BASE_URL`，預設 fallback 為 `http://localhost:8000`，見 `lib/api.ts`）。
+- 目前沒有真正的登入頁：`lib/dev-identity.tsx` 用 localStorage 模擬身分切換（`tenantId` + `role`），`lib/api.ts` 的 `request()` 把它們塞進 `X-Tenant-Id` / `X-User-Role` header 打後端，方便手動驗證 RBAC，之後才會換成 Supabase Auth JWT。
+
+**Docker Compose**：尚未實作。`docker-compose.yml` 是 skeleton，兩個 service 都用 `profiles: ["not-yet-implemented"]` 佔位，實際定義排在 roadmap Day 10。
 
 ---
 
@@ -161,3 +182,5 @@ supabase db push                  # 正式套用到遠端（會改動雲端 sche
 **雙層權限隔離**：`tenant_id` 是硬邊界，交給 Supabase RLS（`documents_rls_policies.sql`），用 pgTAP（`supabase/tests/*.test.sql`）驗證；role-based/confidentiality 過濾是業務規則，留在 FastAPI Query 層（`routers/documents.py` 的 `_require_role` header dependency、`DenseRetriever.retrieve()` 的 `role` 參數），一律用 Pytest + mock repo 驗證（見 Guardrail #6：禁止 Python 直連 DB 測試）。
 
 **雙軌分類鎖**（`documents.classification_status`）：`pending_auto → auto_labeled → manually_verified`。`DocumentsRepository.reorganize()` 升級為 `manually_verified`，`unlock_bulk()`（限 Admin）降級回 `auto_labeled`；`services/classification.py` 的 `on_file_reupload()` 處理「內容變更但已鎖定」的情況——雜湊不符且原狀態為 `manually_verified` 時觸發 `flag_for_review`（目前為 log 佔位，待 Day 9-10 接 Gmail 通知），刻意不自動解鎖。
+
+**前端串接**（`frontend/lib/api.ts` + `app/documents/`）：`request()` 是唯一的 fetch 包裝層，把 `DevIdentityProvider`（`lib/dev-identity.tsx`）目前的 `tenantId`/`role` 轉成 `X-Tenant-Id`/`X-User-Role` header 帶給後端；`app/documents/page.tsx` 用 TanStack Query 讀 `listDocuments()`，`reorganize`/`unlock` 走 mutation 後 `invalidateQueries(["documents"])` 觸發重新抓取——沒有獨立的 polling 元件，狀態更新一律靠 Query 重新 fetch，符合 Guardrail #3（非 Chat 端點禁止 SSE）。角色能不能整理/解鎖是前端（`EDITOR_ROLES`/`role === "admin"`）與後端各自判斷一次，前端這層純粹是 UX 遮罩，真正的授權邊界仍在後端（見上方雙層權限隔離）。

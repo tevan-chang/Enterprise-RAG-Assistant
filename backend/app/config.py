@@ -19,5 +19,11 @@ class Settings(BaseSettings):
 
     retrieval_top_k: int = 5
 
+    allowed_origins: str = "http://localhost:3000"
+
+    @property
+    def allowed_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
+
 
 settings = Settings()

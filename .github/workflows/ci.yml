@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
   # 第一階段：pgTAP，DB 原生層 RLS/RBAC 矩陣驗證優先於其他測試跑
