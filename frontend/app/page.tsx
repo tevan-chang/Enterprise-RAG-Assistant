@@ -11,6 +11,9 @@ export default function Home() {
         <Link href="/documents" className="text-primary underline-offset-4 hover:underline">
           文件列表
         </Link>
+        <Link href="/chat" className="text-primary underline-offset-4 hover:underline">
+          知識問答
+        </Link>
       </div>
     </main>
   );

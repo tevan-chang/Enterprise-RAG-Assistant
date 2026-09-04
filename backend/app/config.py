@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     chunk_overlap_tokens: int = 100
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
+    chat_model: str = "gpt-4o"
 
     zombie_task_timeout_minutes: int = 10
 

@@ -27,7 +27,7 @@ export type DocumentListItem = {
   updated_at: string;
 };
 
-type Identity = { tenantId: string; role: UserRole };
+export type Identity = { tenantId: string; role: UserRole };
 
 class ApiError extends Error {
   constructor(
@@ -90,4 +90,31 @@ export function unlockDocuments(documentIds: string[], identity: Identity): Prom
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ document_ids: documentIds }),
   });
+}
+
+/**
+ * Chat SSE 串流（見 roadmap Day 6）：原生 `EventSource` 不支援自訂 header 帶身分資訊，
+ * 改用 `fetch` 回傳原始 Response，呼叫端自行用 `ReadableStream` 逐段讀取 body。
+ */
+export async function streamChatQuery(
+  query: string,
+  identity: Identity,
+  signal?: AbortSignal,
+): Promise<ReadableStream<Uint8Array>> {
+  const res = await fetch(`${API_BASE_URL}/api/query`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Tenant-Id": identity.tenantId,
+      "X-User-Role": identity.role,
+    },
+    body: JSON.stringify({ query }),
+    signal,
+  });
+
+  if (!res.ok || !res.body) {
+    const detail = await res.text().catch(() => "");
+    throw new ApiError(res.status, detail || res.statusText);
+  }
+  return res.body;
 }
