@@ -64,7 +64,15 @@ function renderMessageContent(
 function CitationModal({ citation, onClose }: { citation: ChatCitation; onClose: () => void }) {
   const identity = useDevIdentity();
   const detailQuery = useQuery({
-    queryKey: ["citation", citation.document_id, citation.page_number, citation.sheet_name, citation.cell_range],
+    queryKey: [
+      "citation",
+      identity.tenantId,
+      identity.role,
+      citation.document_id,
+      citation.page_number,
+      citation.sheet_name,
+      citation.cell_range,
+    ],
     queryFn: () => getCitationDetail(citation, identity),
   });
 
@@ -93,11 +101,10 @@ function CitationModal({ citation, onClose }: { citation: ChatCitation; onClose:
         </div>
 
         {detailQuery.isLoading && <p className="text-sm text-muted-foreground">載入中...</p>}
-        {detailQuery.isError && (
+        {detailQuery.isError ? (
           <p className="text-sm text-destructive">載入失敗：{(detailQuery.error as Error).message}</p>
-        )}
-        {detailQuery.data && (
-          <p className="whitespace-pre-wrap text-sm">{detailQuery.data.content}</p>
+        ) : (
+          detailQuery.data && <p className="whitespace-pre-wrap text-sm">{detailQuery.data.content}</p>
         )}
       </div>
     </div>
