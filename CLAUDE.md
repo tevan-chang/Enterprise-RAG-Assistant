@@ -69,6 +69,7 @@ backend/app/
   repositories/
   schemas/
   adapters/
+  dependencies/       # 跨 router 共用的 FastAPI 依賴（如 auth.py 的 get_current_user/require_role）
 frontend/            # Next.js 14 App Router
 supabase/
   migrations/
@@ -162,8 +163,8 @@ npm run lint     # next lint
 npm run build    # 正式建置
 ```
 
-- 設定讀取來自 `frontend/.env.local`（`NEXT_PUBLIC_API_BASE_URL`，預設 fallback 為 `http://localhost:8000`，見 `lib/api.ts`）。
-- 目前沒有真正的登入頁：`lib/dev-identity.tsx` 用 localStorage 模擬身分切換（`tenantId` + `role`），`lib/api.ts` 的 `request()` 把它們塞進 `X-Tenant-Id` / `X-User-Role` header 打後端，方便手動驗證 RBAC，之後才會換成 Supabase Auth JWT。
+- 設定讀取來自 `frontend/.env.local`（`NEXT_PUBLIC_API_BASE_URL`、`NEXT_PUBLIC_SUPABASE_URL`、`NEXT_PUBLIC_SUPABASE_ANON_KEY`，見 `lib/api.ts` / `lib/supabase/client.ts`）。
+- 登入走 `app/login/page.tsx`（Supabase Auth email/password + Shadcn Form），`middleware.ts` 用 `@supabase/ssr` 的 `createServerClient` 檢查 session，未登入一律導向 `/login`。`lib/auth-context.tsx` 的 `AuthProvider`/`useAuth()` 取代舊的 `dev-identity.tsx`，暴露 `session`/`user`/`tenantId`/`role`（後兩者從 JWT `app_metadata` 解出，純 UX 遮罩用）；`lib/api.ts` 的 `request()` 一律帶 `Authorization: Bearer <session.access_token>` 打後端，不再用 `X-Tenant-Id`/`X-User-Role` header（見 roadmap Day 7.5）。
 
 **Docker Compose**：尚未實作。`docker-compose.yml` 是 skeleton，兩個 service 都用 `profiles: ["not-yet-implemented"]` 佔位，實際定義排在 roadmap Day 10。
 
@@ -179,8 +180,8 @@ npm run build    # 正式建置
 
 **檢索**（`adapters/retrievers.py`）：`DenseRetriever` 是 `BaseRetriever` 唯一實作，把「產生 query embedding」與 `ChunksRepository.match()` 串起來。`match()` 呼叫 Postgres RPC `match_document_chunks`（見 `supabase/migrations/20260903120000_match_document_chunks_function.sql`），Metadata Filter（`tenant_id` 必要、`departments`/`confidentiality` 可選）在 SQL function 內部套用、跟 pgvector cosine 排序一起執行——不可在 Python 端用 `.eq()` 事後過濾，否則 planner 無法把 filter 跟向量排序一起最佳化，selective filter 還可能讓 top-k 少於預期筆數。`RRFFusionRetriever` 依 Guardrail #2 只以註解形式存在。
 
-**雙層權限隔離**：`tenant_id` 是硬邊界，交給 Supabase RLS（`documents_rls_policies.sql`），用 pgTAP（`supabase/tests/*.test.sql`）驗證；role-based/confidentiality 過濾是業務規則，留在 FastAPI Query 層（`routers/documents.py` 的 `_require_role` header dependency、`DenseRetriever.retrieve()` 的 `role` 參數），一律用 Pytest + mock repo 驗證（見 Guardrail #6：禁止 Python 直連 DB 測試）。
+**雙層權限隔離**：`tenant_id` 是硬邊界，交給 Supabase RLS（`documents_rls_policies.sql`），用 pgTAP（`supabase/tests/*.test.sql`）驗證；role-based/confidentiality 過濾是業務規則，留在 FastAPI Query 層（`dependencies/auth.py` 的 `get_current_user`/`require_role` 依賴、`DenseRetriever.retrieve()` 的 `role` 參數），一律用 Pytest + mock repo 驗證（見 Guardrail #6：禁止 Python 直連 DB 測試）。`tenant_id`/`role` 來源是 Supabase Auth JWT 的 `app_metadata`（`get_current_user` 用 `SUPABASE_JWT_SECRET` 驗證簽章後解出），不是使用者可自行宣稱的 header（見 roadmap Day 7.5，取代原本的 dev-identity header 信任機制）。`public.profiles` table（見 `20260904090000_create_profiles_table.sql`）由 `handle_new_user` trigger 從 `auth.users` 同步，是正規化的使用者資料（給 pgTAP 測試與未來管理介面用），不是 RLS 或後端授權判斷的來源。
 
 **雙軌分類鎖**（`documents.classification_status`）：`pending_auto → auto_labeled → manually_verified`。`DocumentsRepository.reorganize()` 升級為 `manually_verified`，`unlock_bulk()`（限 Admin）降級回 `auto_labeled`；`services/classification.py` 的 `on_file_reupload()` 處理「內容變更但已鎖定」的情況——雜湊不符且原狀態為 `manually_verified` 時觸發 `flag_for_review`（目前為 log 佔位，待 Day 9-10 接 Gmail 通知），刻意不自動解鎖。
 
-**前端串接**（`frontend/lib/api.ts` + `app/documents/`）：`request()` 是唯一的 fetch 包裝層，把 `DevIdentityProvider`（`lib/dev-identity.tsx`）目前的 `tenantId`/`role` 轉成 `X-Tenant-Id`/`X-User-Role` header 帶給後端；`app/documents/page.tsx` 用 TanStack Query 讀 `listDocuments()`，`reorganize`/`unlock` 走 mutation 後 `invalidateQueries(["documents"])` 觸發重新抓取——沒有獨立的 polling 元件，狀態更新一律靠 Query 重新 fetch，符合 Guardrail #3（非 Chat 端點禁止 SSE）。角色能不能整理/解鎖是前端（`EDITOR_ROLES`/`role === "admin"`）與後端各自判斷一次，前端這層純粹是 UX 遮罩，真正的授權邊界仍在後端（見上方雙層權限隔離）。
+**前端串接**（`frontend/lib/api.ts` + `app/documents/`）：`request()` 是唯一的 fetch 包裝層，帶 `AuthProvider`（`lib/auth-context.tsx`）目前 session 的 `access_token` 當 `Authorization: Bearer` header 打後端；`app/documents/page.tsx` 用 TanStack Query 讀 `listDocuments()`，`reorganize`/`unlock` 走 mutation 後 `invalidateQueries(["documents"])` 觸發重新抓取——沒有獨立的 polling 元件，狀態更新一律靠 Query 重新 fetch，符合 Guardrail #3（非 Chat 端點禁止 SSE）。角色能不能整理/解鎖是前端（`EDITOR_ROLES`/`role === "admin"`，`role` 從 `useAuth()` 的 JWT `app_metadata` 解出）與後端各自判斷一次，前端這層純粹是 UX 遮罩，真正的授權邊界仍在後端（見上方雙層權限隔離）。

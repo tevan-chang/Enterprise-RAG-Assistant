@@ -1,8 +1,10 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.dependencies.auth import UserContext, get_current_user
 from app.routers import documents
 
 _MODULE = "app.routers.documents"
@@ -14,7 +16,20 @@ _test_app.include_router(documents.router)
 client = TestClient(_test_app)
 
 
-def test_list_documents_scoped_by_tenant_header():
+@pytest.fixture(autouse=True)
+def _clear_dependency_overrides():
+    yield
+    _test_app.dependency_overrides.clear()
+
+
+def _as_user(tenant_id: str = "tenant_a", role: str = "admin", user_id: str = "user-1"):
+    """用 dependency_overrides 覆寫 get_current_user，取代舊的 X-Tenant-Id/X-User-Role header。"""
+    _test_app.dependency_overrides[get_current_user] = lambda: UserContext(
+        user_id=user_id, tenant_id=tenant_id, role=role
+    )
+
+
+def test_list_documents_scoped_by_tenant():
     repo = MagicMock()
     repo.list_by_tenant.return_value = [
         {
@@ -27,9 +42,10 @@ def test_list_documents_scoped_by_tenant_header():
             "updated_at": "2026-09-04T00:00:00+00:00",
         }
     ]
+    _as_user(tenant_id="tenant_a")
 
     with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
-        resp = client.get("/api/documents", headers={"X-Tenant-Id": "tenant_a"})
+        resp = client.get("/api/documents")
 
     assert resp.status_code == 200
     assert resp.json() == [
@@ -46,7 +62,7 @@ def test_list_documents_scoped_by_tenant_header():
     repo.list_by_tenant.assert_called_once_with("tenant_a")
 
 
-def test_list_documents_without_tenant_header_returns_422():
+def test_list_documents_without_authorization_header_returns_422():
     resp = client.get("/api/documents")
 
     assert resp.status_code == 422
@@ -59,12 +75,12 @@ def test_reorganize_as_editor_upgrades_to_manually_verified():
         "classification_status": "manually_verified",
         "final_categories": ["2026核心資料"],
     }
+    _as_user(role="editor")
 
     with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
         resp = client.post(
             "/api/documents/reorganize",
             json={"document_id": "doc-1", "manual_categories": ["2026核心資料"]},
-            headers={"X-User-Role": "editor"},
         )
 
     assert resp.status_code == 200
@@ -73,11 +89,12 @@ def test_reorganize_as_editor_upgrades_to_manually_verified():
 
 
 def test_reorganize_as_viewer_returns_403():
+    _as_user(role="viewer")
+
     with patch(f"{_MODULE}.DocumentsRepository") as MockRepo:
         resp = client.post(
             "/api/documents/reorganize",
             json={"document_id": "doc-1", "manual_categories": ["財務"]},
-            headers={"X-User-Role": "viewer"},
         )
 
     assert resp.status_code == 403
@@ -87,12 +104,12 @@ def test_reorganize_as_viewer_returns_403():
 def test_reorganize_missing_document_returns_404():
     repo = MagicMock()
     repo.reorganize.return_value = None
+    _as_user(role="admin")
 
     with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
         resp = client.post(
             "/api/documents/reorganize",
             json={"document_id": "missing", "manual_categories": ["財務"]},
-            headers={"X-User-Role": "admin"},
         )
 
     assert resp.status_code == 404
@@ -101,12 +118,12 @@ def test_reorganize_missing_document_returns_404():
 def test_unlock_as_admin_succeeds():
     repo = MagicMock()
     repo.unlock_bulk.return_value = [{"id": "doc-1"}, {"id": "doc-2"}]
+    _as_user(role="admin")
 
     with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
         resp = client.post(
             "/api/documents/unlock",
             json={"document_ids": ["doc-1", "doc-2"]},
-            headers={"X-User-Role": "admin"},
         )
 
     assert resp.status_code == 200
@@ -116,18 +133,18 @@ def test_unlock_as_admin_succeeds():
 def test_unlock_as_non_admin_returns_403():
     """Day 5 DoD：unlock 端點對非 Admin 一律回傳 403（見 spec §3.2 `unlock` 動作限 Admin）。"""
     for role in ("editor", "viewer"):
+        _as_user(role=role)
         with patch(f"{_MODULE}.DocumentsRepository") as MockRepo:
             resp = client.post(
                 "/api/documents/unlock",
                 json={"document_ids": ["doc-1"]},
-                headers={"X-User-Role": role},
             )
 
         assert resp.status_code == 403, f"role={role} 應被拒絕"
         MockRepo.return_value.unlock_bulk.assert_not_called()
 
 
-def test_unlock_without_role_header_returns_422():
+def test_unlock_without_authorization_header_returns_422():
     resp = client.post("/api/documents/unlock", json={"document_ids": ["doc-1"]})
 
     assert resp.status_code == 422
@@ -152,6 +169,7 @@ def test_get_citation_by_page_number_returns_joined_chunk_content():
         {"chunk_index": 0, "content": "第一段"},
         {"chunk_index": 1, "content": "第二段"},
     ]
+    _as_user(tenant_id="tenant_a", role="admin")
 
     with (
         patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo),
@@ -160,7 +178,6 @@ def test_get_citation_by_page_number_returns_joined_chunk_content():
         resp = client.get(
             "/api/documents/doc-1/citation",
             params={"page_number": 3},
-            headers={"X-Tenant-Id": "tenant_a", "X-User-Role": "admin"},
         )
 
     assert resp.status_code == 200
@@ -182,6 +199,7 @@ def test_get_citation_by_sheet_and_cell_range():
     documents_repo.get.return_value = _fake_doc(file_name="2026Q2.xlsx")
     chunks_repo = MagicMock()
     chunks_repo.list_by_location.return_value = [{"chunk_index": 0, "content": "B2:D15 內容"}]
+    _as_user(tenant_id="tenant_a", role="admin")
 
     with (
         patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo),
@@ -190,7 +208,6 @@ def test_get_citation_by_sheet_and_cell_range():
         resp = client.get(
             "/api/documents/doc-1/citation",
             params={"sheet_name": "營收明細", "cell_range": "B2:D15"},
-            headers={"X-Tenant-Id": "tenant_a", "X-User-Role": "admin"},
         )
 
     assert resp.status_code == 200
@@ -198,10 +215,9 @@ def test_get_citation_by_sheet_and_cell_range():
 
 
 def test_get_citation_without_location_params_returns_422():
-    resp = client.get(
-        "/api/documents/doc-1/citation",
-        headers={"X-Tenant-Id": "tenant_a", "X-User-Role": "admin"},
-    )
+    _as_user(tenant_id="tenant_a", role="admin")
+
+    resp = client.get("/api/documents/doc-1/citation")
 
     assert resp.status_code == 422
 
@@ -210,12 +226,12 @@ def test_get_citation_cross_tenant_returns_404():
     """documents repo 用 service_role key bypass RLS，tenant 隔離必須在這層擋（見 CLAUDE.md 雙層權限隔離）。"""
     documents_repo = MagicMock()
     documents_repo.get.return_value = _fake_doc(tenant_id="tenant_b")
+    _as_user(tenant_id="tenant_a", role="admin")
 
     with patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo):
         resp = client.get(
             "/api/documents/doc-1/citation",
             params={"page_number": 3},
-            headers={"X-Tenant-Id": "tenant_a", "X-User-Role": "admin"},
         )
 
     assert resp.status_code == 404
@@ -224,12 +240,12 @@ def test_get_citation_cross_tenant_returns_404():
 def test_get_citation_missing_document_returns_404():
     documents_repo = MagicMock()
     documents_repo.get.return_value = None
+    _as_user(tenant_id="tenant_a", role="admin")
 
     with patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo):
         resp = client.get(
             "/api/documents/missing/citation",
             params={"page_number": 3},
-            headers={"X-Tenant-Id": "tenant_a", "X-User-Role": "admin"},
         )
 
     assert resp.status_code == 404
@@ -238,12 +254,12 @@ def test_get_citation_missing_document_returns_404():
 def test_get_citation_as_viewer_on_restricted_document_returns_403():
     documents_repo = MagicMock()
     documents_repo.get.return_value = _fake_doc(confidentiality="restricted")
+    _as_user(tenant_id="tenant_a", role="viewer")
 
     with patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo):
         resp = client.get(
             "/api/documents/doc-1/citation",
             params={"page_number": 3},
-            headers={"X-Tenant-Id": "tenant_a", "X-User-Role": "viewer"},
         )
 
     assert resp.status_code == 403
@@ -254,6 +270,7 @@ def test_get_citation_no_matching_chunks_returns_404():
     documents_repo.get.return_value = _fake_doc()
     chunks_repo = MagicMock()
     chunks_repo.list_by_location.return_value = []
+    _as_user(tenant_id="tenant_a", role="admin")
 
     with (
         patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo),
@@ -262,7 +279,6 @@ def test_get_citation_no_matching_chunks_returns_404():
         resp = client.get(
             "/api/documents/doc-1/citation",
             params={"page_number": 99},
-            headers={"X-Tenant-Id": "tenant_a", "X-User-Role": "admin"},
         )
 
     assert resp.status_code == 404

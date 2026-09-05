@@ -9,8 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { IdentitySwitcher } from "@/components/identity-switcher";
-import { useDevIdentity } from "@/lib/dev-identity";
+import { useAuth } from "@/lib/auth-context";
 import { getDocumentStatus, uploadDocument, type ProcessingStatus } from "@/lib/api";
 
 const TERMINAL_STATUSES = new Set<ProcessingStatus>(["completed", "failed"]);
@@ -24,22 +23,22 @@ const STATUS_LABEL: Record<ProcessingStatus, string> = {
 };
 
 export default function UploadPage() {
-  const identity = useDevIdentity();
+  const { session, isLoading } = useAuth();
   const [file, setFile] = useState<File | null>(null);
   const [documentId, setDocumentId] = useState<string | null>(null);
 
   const uploadMutation = useMutation({
     mutationFn: () => {
       if (!file) throw new Error("請先選擇檔案");
-      return uploadDocument(file, identity);
+      return uploadDocument(file, session!.access_token);
     },
     onSuccess: (data) => setDocumentId(data.document_id),
   });
 
   const statusQuery = useQuery({
-    queryKey: ["document-status", documentId, identity.tenantId, identity.role],
-    queryFn: () => getDocumentStatus(documentId as string, identity),
-    enabled: documentId !== null,
+    queryKey: ["document-status", documentId, session?.user.id],
+    queryFn: () => getDocumentStatus(documentId as string, session!.access_token),
+    enabled: documentId !== null && !!session,
     refetchInterval: (query) => {
       const status = query.state.data?.processing_status;
       return status && TERMINAL_STATUSES.has(status) ? false : 2000;
@@ -48,12 +47,13 @@ export default function UploadPage() {
 
   const status = statusQuery.data?.processing_status;
 
+  if (isLoading || !session) {
+    return <main className="mx-auto max-w-xl p-6 text-sm text-muted-foreground">載入中...</main>;
+  }
+
   return (
     <main className="mx-auto flex max-w-xl flex-col gap-4 p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">上傳文件</h1>
-        <IdentitySwitcher />
-      </div>
+      <h1 className="text-xl font-semibold">上傳文件</h1>
 
       <Card>
         <CardHeader>

@@ -1,8 +1,9 @@
 import hashlib
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
 
 from app.adapters.retrievers import VIEWER_ALLOWED_CONFIDENTIALITY
+from app.dependencies.auth import UserContext, get_current_user, require_role
 from app.repositories.chunks_repository import ChunksRepository
 from app.repositories.documents_repository import DocumentsRepository
 from app.schemas.documents import (
@@ -31,20 +32,11 @@ _EDITOR_ROLES = {"admin", "editor"}
 _ADMIN_ROLES = {"admin"}
 
 
-def _require_role(allowed_roles: set[str]):
-    def _dependency(x_user_role: str = Header(alias="X-User-Role")) -> str:
-        if x_user_role not in allowed_roles:
-            raise HTTPException(status_code=403, detail="權限不足")
-        return x_user_role
-
-    return _dependency
-
-
 @router.post("/upload", response_model=DocumentUploadResponse)
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile,
-    x_tenant_id: str = Header(alias="X-Tenant-Id"),
+    user: UserContext = Depends(get_current_user),
 ):
     pipeline = _PIPELINE_BY_CONTENT_TYPE.get(file.content_type)
     if pipeline is None:
@@ -54,13 +46,13 @@ async def upload_document(
     file_content_hash = hashlib.sha256(file_bytes).hexdigest()
     documents_repo = DocumentsRepository()
     doc = documents_repo.create(
-        tenant_id=x_tenant_id, file_name=file.filename, file_content_hash=file_content_hash
+        tenant_id=user.tenant_id, file_name=file.filename, file_content_hash=file_content_hash
     )
 
     background_tasks.add_task(
         pipeline,
         document_id=doc["id"],
-        tenant_id=x_tenant_id,
+        tenant_id=user.tenant_id,
         file_bytes=file_bytes,
         file_name=file.filename,
     )
@@ -69,10 +61,10 @@ async def upload_document(
 
 
 @router.get("", response_model=list[DocumentListItem])
-async def list_documents(x_tenant_id: str = Header(alias="X-Tenant-Id")):
-    """文件列表頁用（見 roadmap Day 5 前端串接），依 tenant_id 隔離（同 upload 的 header 慣例）。"""
+async def list_documents(user: UserContext = Depends(get_current_user)):
+    """文件列表頁用（見 roadmap Day 5 前端串接），依 tenant_id 隔離。"""
     documents_repo = DocumentsRepository()
-    docs = documents_repo.list_by_tenant(x_tenant_id)
+    docs = documents_repo.list_by_tenant(user.tenant_id)
     return [
         DocumentListItem(
             document_id=doc["id"],
@@ -111,8 +103,7 @@ async def get_document_chunks(document_id: str):
 @router.get("/{document_id}/citation", response_model=CitationDetailResponse)
 async def get_citation(
     document_id: str,
-    x_tenant_id: str = Header(alias="X-Tenant-Id"),
-    x_user_role: str = Header(alias="X-User-Role"),
+    user: UserContext = Depends(get_current_user),
     page_number: int | None = None,
     sheet_name: str | None = None,
     cell_range: str | None = None,
@@ -128,9 +119,9 @@ async def get_citation(
 
     documents_repo = DocumentsRepository()
     doc = documents_repo.get(document_id)
-    if doc is None or doc["tenant_id"] != x_tenant_id:
+    if doc is None or doc["tenant_id"] != user.tenant_id:
         raise HTTPException(status_code=404, detail="文件不存在")
-    if x_user_role == "viewer" and doc["confidentiality"] not in VIEWER_ALLOWED_CONFIDENTIALITY:
+    if user.role == "viewer" and doc["confidentiality"] not in VIEWER_ALLOWED_CONFIDENTIALITY:
         raise HTTPException(status_code=403, detail="權限不足")
 
     chunks_repo = ChunksRepository()
@@ -150,7 +141,7 @@ async def get_citation(
     )
 
 
-@router.post("/reorganize", response_model=ReorganizeResponse, dependencies=[Depends(_require_role(_EDITOR_ROLES))])
+@router.post("/reorganize", response_model=ReorganizeResponse, dependencies=[Depends(require_role(_EDITOR_ROLES))])
 async def reorganize_document(payload: ReorganizeRequest):
     """手動整理：狀態鎖升級為 manually_verified（見 spec §4.2 / roadmap Day 5）。
 
@@ -168,7 +159,7 @@ async def reorganize_document(payload: ReorganizeRequest):
     )
 
 
-@router.post("/unlock", response_model=UnlockResponse, dependencies=[Depends(_require_role(_ADMIN_ROLES))])
+@router.post("/unlock", response_model=UnlockResponse, dependencies=[Depends(require_role(_ADMIN_ROLES))])
 async def unlock_documents(payload: UnlockRequest):
     """批次解鎖：狀態鎖降級為 auto_labeled，限 Admin（見 spec §3.2 / roadmap Day 5）。"""
     documents_repo = DocumentsRepository()
