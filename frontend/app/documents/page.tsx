@@ -8,8 +8,7 @@ import { Wand2, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { IdentitySwitcher } from "@/components/identity-switcher";
-import { useDevIdentity } from "@/lib/dev-identity";
+import { useAuth } from "@/lib/auth-context";
 import {
   listDocuments,
   reorganizeDocument,
@@ -53,7 +52,8 @@ function ClassificationBadge({ status }: { status: ClassificationStatus }) {
 }
 
 function DocumentRow({ doc }: { doc: DocumentListItem }) {
-  const identity = useDevIdentity();
+  const { session, role } = useAuth();
+  const accessToken = session!.access_token;
   const queryClient = useQueryClient();
   const [categoriesInput, setCategoriesInput] = useState(doc.final_categories.join(", "));
 
@@ -65,18 +65,18 @@ function DocumentRow({ doc }: { doc: DocumentListItem }) {
         .split(",")
         .map((c) => c.trim())
         .filter(Boolean);
-      return reorganizeDocument(doc.document_id, categories, identity);
+      return reorganizeDocument(doc.document_id, categories, accessToken);
     },
     onSuccess: invalidate,
   });
 
   const unlockMutation = useMutation({
-    mutationFn: () => unlockDocuments([doc.document_id], identity),
+    mutationFn: () => unlockDocuments([doc.document_id], accessToken),
     onSuccess: invalidate,
   });
 
-  const canReorganize = EDITOR_ROLES.has(identity.role);
-  const canUnlock = identity.role === "admin" && doc.classification_status === "manually_verified";
+  const canReorganize = EDITOR_ROLES.has(role ?? "");
+  const canUnlock = role === "admin" && doc.classification_status === "manually_verified";
 
   return (
     <tr className="border-b">
@@ -128,19 +128,21 @@ function DocumentRow({ doc }: { doc: DocumentListItem }) {
 }
 
 export default function DocumentsPage() {
-  const identity = useDevIdentity();
+  const { session, isLoading } = useAuth();
 
   const documentsQuery = useQuery({
-    queryKey: ["documents", identity.tenantId, identity.role],
-    queryFn: () => listDocuments(identity),
+    queryKey: ["documents", session?.user.id],
+    queryFn: () => listDocuments(session!.access_token),
+    enabled: !!session,
   });
+
+  if (isLoading || !session) {
+    return <main className="mx-auto max-w-4xl p-6 text-sm text-muted-foreground">載入中...</main>;
+  }
 
   return (
     <main className="mx-auto flex max-w-4xl flex-col gap-4 p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">文件列表</h1>
-        <IdentitySwitcher />
-      </div>
+      <h1 className="text-xl font-semibold">文件列表</h1>
 
       <Link href="/documents/upload" className="text-sm text-primary underline-offset-4 hover:underline">
         + 上傳新文件

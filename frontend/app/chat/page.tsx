@@ -5,8 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { IdentitySwitcher } from "@/components/identity-switcher";
-import { useDevIdentity } from "@/lib/dev-identity";
+import { useAuth } from "@/lib/auth-context";
 import { streamChatQuery, getCitationDetail, type ChatCitation } from "@/lib/api";
 
 type Message = {
@@ -62,18 +61,18 @@ function renderMessageContent(
 
 /** Citation 跳轉 Modal（見 roadmap Day 7）：打 Citation 跳轉 API 顯示整段原文，不做精確段落高亮。 */
 function CitationModal({ citation, onClose }: { citation: ChatCitation; onClose: () => void }) {
-  const identity = useDevIdentity();
+  const { session } = useAuth();
   const detailQuery = useQuery({
     queryKey: [
       "citation",
-      identity.tenantId,
-      identity.role,
+      session?.user.id,
       citation.document_id,
       citation.page_number,
       citation.sheet_name,
       citation.cell_range,
     ],
-    queryFn: () => getCitationDetail(citation, identity),
+    queryFn: () => getCitationDetail(citation, session!.access_token),
+    enabled: !!session,
   });
 
   const location =
@@ -123,7 +122,7 @@ function parseSseFrame(frame: string): { event: string; data: unknown } | null {
 }
 
 export default function ChatPage() {
-  const identity = useDevIdentity();
+  const { session, isLoading } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -169,7 +168,7 @@ export default function ChatPage() {
     };
 
     try {
-      const body = await streamChatQuery(query, identity);
+      const body = await streamChatQuery(query, session!.access_token);
       const reader = body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -229,12 +228,13 @@ export default function ChatPage() {
 
   const lastMessage = messages[messages.length - 1];
 
+  if (isLoading || !session) {
+    return <main className="mx-auto max-w-2xl p-6 text-sm text-muted-foreground">載入中...</main>;
+  }
+
   return (
     <main className="mx-auto flex h-screen max-w-2xl flex-col gap-4 p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">知識問答 Chat</h1>
-        <IdentitySwitcher />
-      </div>
+      <h1 className="text-xl font-semibold">知識問答 Chat</h1>
 
       <div className="flex-1 space-y-3 overflow-y-auto rounded-md border p-4">
         {messages.length === 0 && (

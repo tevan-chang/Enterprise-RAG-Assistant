@@ -42,7 +42,7 @@ select throws_ok(
 -- ============================================================
 set local role authenticated;
 set local request.jwt.claims =
-  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_a", "user_role": "viewer"}}';
+  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_a", "role": "viewer"}}';
 
 select is(
   (select count(*)::int from public.document_chunks where tenant_id = 'tenant_a'),
@@ -108,7 +108,7 @@ select has_column('public', 'document_chunks', 'cell_range', 'schema: document_c
 
 set local role authenticated;
 set local request.jwt.claims =
-  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_a", "user_role": "viewer"}}';
+  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_a", "role": "viewer"}}';
 
 select results_eq(
   $$select sheet_name, cell_range from public.document_chunks
@@ -124,7 +124,7 @@ select is(
 );
 
 set local request.jwt.claims =
-  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_b", "user_role": "viewer"}}';
+  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_b", "role": "viewer"}}';
 
 select is_empty(
   $$select * from public.document_chunks where document_id = '33333333-3333-3333-3333-333333333333'$$,

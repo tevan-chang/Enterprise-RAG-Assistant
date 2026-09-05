@@ -1,5 +1,3 @@
-import type { UserRole } from "@/lib/dev-identity";
-
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 export type ProcessingStatus = "parsing" | "chunking" | "embedding" | "completed" | "failed";
@@ -48,8 +46,6 @@ export type CitationDetailResponse = {
   content: string;
 };
 
-export type Identity = { tenantId: string; role: UserRole };
-
 class ApiError extends Error {
   constructor(
     public status: number,
@@ -59,12 +55,11 @@ class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, identity: Identity, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, accessToken: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
-      "X-Tenant-Id": identity.tenantId,
-      "X-User-Role": identity.role,
+      Authorization: `Bearer ${accessToken}`,
       ...init?.headers,
     },
   });
@@ -76,29 +71,29 @@ async function request<T>(path: string, identity: Identity, init?: RequestInit):
   return res.json() as Promise<T>;
 }
 
-export function uploadDocument(file: File, identity: Identity): Promise<DocumentUploadResponse> {
+export function uploadDocument(file: File, accessToken: string): Promise<DocumentUploadResponse> {
   const formData = new FormData();
   formData.append("file", file);
-  return request<DocumentUploadResponse>("/api/documents/upload", identity, {
+  return request<DocumentUploadResponse>("/api/documents/upload", accessToken, {
     method: "POST",
     body: formData,
   });
 }
 
-export function getDocumentStatus(documentId: string, identity: Identity): Promise<DocumentStatusResponse> {
-  return request<DocumentStatusResponse>(`/api/documents/${documentId}/status`, identity);
+export function getDocumentStatus(documentId: string, accessToken: string): Promise<DocumentStatusResponse> {
+  return request<DocumentStatusResponse>(`/api/documents/${documentId}/status`, accessToken);
 }
 
-export function listDocuments(identity: Identity): Promise<DocumentListItem[]> {
-  return request<DocumentListItem[]>("/api/documents", identity);
+export function listDocuments(accessToken: string): Promise<DocumentListItem[]> {
+  return request<DocumentListItem[]>("/api/documents", accessToken);
 }
 
 export function reorganizeDocument(
   documentId: string,
   manualCategories: string[],
-  identity: Identity,
+  accessToken: string,
 ): Promise<void> {
-  return request("/api/documents/reorganize", identity, {
+  return request("/api/documents/reorganize", accessToken, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ document_id: documentId, manual_categories: manualCategories }),
@@ -108,7 +103,7 @@ export function reorganizeDocument(
 /** Citation 跳轉 API（見 roadmap Day 7）：依 citation 的 page_number 或 sheet_name+cell_range 定位。 */
 export function getCitationDetail(
   citation: Pick<ChatCitation, "document_id" | "page_number" | "sheet_name" | "cell_range">,
-  identity: Identity,
+  accessToken: string,
 ): Promise<CitationDetailResponse> {
   const params = new URLSearchParams();
   if (citation.page_number != null) {
@@ -120,12 +115,12 @@ export function getCitationDetail(
   }
   return request<CitationDetailResponse>(
     `/api/documents/${citation.document_id}/citation?${params.toString()}`,
-    identity,
+    accessToken,
   );
 }
 
-export function unlockDocuments(documentIds: string[], identity: Identity): Promise<void> {
-  return request("/api/documents/unlock", identity, {
+export function unlockDocuments(documentIds: string[], accessToken: string): Promise<void> {
+  return request("/api/documents/unlock", accessToken, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ document_ids: documentIds }),
@@ -133,20 +128,20 @@ export function unlockDocuments(documentIds: string[], identity: Identity): Prom
 }
 
 /**
- * Chat SSE 串流（見 roadmap Day 6）：原生 `EventSource` 不支援自訂 header 帶身分資訊，
- * 改用 `fetch` 回傳原始 Response，呼叫端自行用 `ReadableStream` 逐段讀取 body。
+ * Chat SSE 串流（見 roadmap Day 6）：用 `fetch` 讀取原始 Response，呼叫端自行用
+ * `ReadableStream` 逐段讀取 body（`Authorization` header 直接帶 access token 即可，
+ * 不需要 query string 傳 token 的過渡方案）。
  */
 export async function streamChatQuery(
   query: string,
-  identity: Identity,
+  accessToken: string,
   signal?: AbortSignal,
 ): Promise<ReadableStream<Uint8Array>> {
   const res = await fetch(`${API_BASE_URL}/api/query`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Tenant-Id": identity.tenantId,
-      "X-User-Role": identity.role,
+      Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify({ query }),
     signal,

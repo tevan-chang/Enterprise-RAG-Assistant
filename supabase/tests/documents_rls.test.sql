@@ -54,7 +54,7 @@ select throws_ok(
 -- ============================================================
 set local role authenticated;
 set local request.jwt.claims =
-  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_a", "user_role": "viewer"}}';
+  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_a", "role": "viewer"}}';
 
 select is(
   (select count(*)::int from public.documents where tenant_id = 'tenant_a'),
@@ -79,7 +79,7 @@ select is_empty(
 -- 驗證 RLS 對 Admin/Editor/Viewer 一視同仁，皆只受 tenant_id 約束
 -- ============================================================
 set local request.jwt.claims =
-  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_a", "user_role": "admin"}}';
+  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_a", "role": "admin"}}';
 select results_eq(
   $$select file_name from public.documents where tenant_id = 'tenant_a' and confidentiality = 'internal'$$,
   array['a_internal.pdf'],
@@ -91,7 +91,7 @@ select is_empty(
 );
 
 set local request.jwt.claims =
-  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_a", "user_role": "editor"}}';
+  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_a", "role": "editor"}}';
 select results_eq(
   $$select file_name from public.documents where tenant_id = 'tenant_a' and confidentiality = 'internal'$$,
   array['a_internal.pdf'],
@@ -103,7 +103,7 @@ select is_empty(
 );
 
 set local request.jwt.claims =
-  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_a", "user_role": "viewer"}}';
+  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_a", "role": "viewer"}}';
 select results_eq(
   $$select file_name from public.documents where tenant_id = 'tenant_a' and confidentiality = 'internal'$$,
   array['a_internal.pdf'],
@@ -118,7 +118,7 @@ select is_empty(
 -- Section D：CRUD 四種操作完整跑一輪（代表角色 editor + internal）
 -- ============================================================
 set local request.jwt.claims =
-  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_a", "user_role": "editor"}}';
+  '{"role": "authenticated", "app_metadata": {"tenant_id": "tenant_a", "role": "editor"}}';
 
 select lives_ok(
   $$insert into public.documents (tenant_id, file_name, confidentiality)
