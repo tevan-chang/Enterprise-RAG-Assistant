@@ -150,6 +150,131 @@ def test_unlock_without_authorization_header_returns_422():
     assert resp.status_code == 422
 
 
+def test_get_status_scoped_to_own_tenant():
+    repo = MagicMock()
+    repo.get.return_value = {
+        "id": "doc-1",
+        "tenant_id": "tenant_a",
+        "file_name": "a.pdf",
+        "processing_status": "embedding",
+        "updated_at": "2026-09-04T00:00:00+00:00",
+    }
+    _as_user(tenant_id="tenant_a")
+
+    with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
+        resp = client.get("/api/documents/doc-1/status")
+
+    assert resp.status_code == 200
+    assert resp.json()["processing_status"] == "embedding"
+
+
+def test_get_status_without_authorization_header_returns_422():
+    resp = client.get("/api/documents/doc-1/status")
+
+    assert resp.status_code == 422
+
+
+def test_get_status_cross_tenant_returns_404():
+    """documents repo 用 service_role key bypass RLS，tenant 隔離必須在這層擋
+    （見 CLAUDE.md 雙層權限隔離）；缺這道檢查等於任何人知道 document_id 就能查到
+    其他租戶的處理狀態，是 spec §11「RLS Policy 正確性錯誤」風險項對應的實際漏洞。
+    """
+    repo = MagicMock()
+    repo.get.return_value = {
+        "id": "doc-1",
+        "tenant_id": "tenant_b",
+        "file_name": "b.pdf",
+        "processing_status": "completed",
+        "updated_at": "2026-09-04T00:00:00+00:00",
+    }
+    _as_user(tenant_id="tenant_a")
+
+    with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
+        resp = client.get("/api/documents/doc-1/status")
+
+    assert resp.status_code == 404
+
+
+def test_get_status_missing_document_returns_404():
+    repo = MagicMock()
+    repo.get.return_value = None
+    _as_user(tenant_id="tenant_a")
+
+    with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
+        resp = client.get("/api/documents/missing/status")
+
+    assert resp.status_code == 404
+
+
+def test_get_chunks_scoped_to_own_tenant():
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = _fake_doc()
+    chunks_repo = MagicMock()
+    chunks_repo.list_by_document.return_value = [
+        {"chunk_index": 0, "page_number": 1, "content": "第一段", "token_count": 10, "sheet_name": None, "cell_range": None}
+    ]
+    _as_user(tenant_id="tenant_a", role="admin")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo),
+        patch(f"{_MODULE}.ChunksRepository", return_value=chunks_repo),
+    ):
+        resp = client.get("/api/documents/doc-1/chunks")
+
+    assert resp.status_code == 200
+    assert resp.json()[0]["content"] == "第一段"
+
+
+def test_get_chunks_without_authorization_header_returns_422():
+    resp = client.get("/api/documents/doc-1/chunks")
+
+    assert resp.status_code == 422
+
+
+def test_get_chunks_cross_tenant_returns_404():
+    """比照 `/citation`：chunks 回傳完整解析內文，tenant 隔離必須在 Python 層做
+    （repo 用 service_role key bypass RLS，見 CLAUDE.md 雙層權限隔離）。"""
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = _fake_doc(tenant_id="tenant_b")
+    _as_user(tenant_id="tenant_a", role="admin")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo),
+        patch(f"{_MODULE}.ChunksRepository") as MockChunksRepo,
+    ):
+        resp = client.get("/api/documents/doc-1/chunks")
+
+    assert resp.status_code == 404
+    MockChunksRepo.return_value.list_by_document.assert_not_called()
+
+
+def test_get_chunks_missing_document_returns_404():
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = None
+    _as_user(tenant_id="tenant_a", role="admin")
+
+    with patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo):
+        resp = client.get("/api/documents/missing/chunks")
+
+    assert resp.status_code == 404
+
+
+def test_get_chunks_as_viewer_on_restricted_document_returns_403():
+    """chunks 敏感度與 citation 相同（完整內文），viewer 對 restricted 文件比照擋下。"""
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = _fake_doc(confidentiality="restricted")
+    _as_user(tenant_id="tenant_a", role="viewer")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository", return_value=documents_repo),
+        patch(f"{_MODULE}.ChunksRepository") as MockChunksRepo,
+    ):
+        resp = client.get("/api/documents/doc-1/chunks")
+
+    assert resp.status_code == 403
+    MockChunksRepo.return_value.list_by_document.assert_not_called()
+
+
 def _fake_doc(**overrides):
     doc = {
         "id": "doc-1",

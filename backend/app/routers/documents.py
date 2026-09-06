@@ -80,10 +80,13 @@ async def list_documents(user: UserContext = Depends(get_current_user)):
 
 
 @router.get("/{document_id}/status", response_model=DocumentStatusResponse)
-async def get_document_status(document_id: str):
+async def get_document_status(document_id: str, user: UserContext = Depends(get_current_user)):
+    """`repositories/` 用 service_role key bypass RLS，tenant_id 隔離必須在這層做
+    （見 CLAUDE.md 雙層權限隔離），否則任何人知道 document_id 就能查到其他租戶的處理狀態。
+    """
     documents_repo = DocumentsRepository()
     doc = documents_repo.get(document_id)
-    if doc is None:
+    if doc is None or doc["tenant_id"] != user.tenant_id:
         raise HTTPException(status_code=404, detail="文件不存在")
 
     return DocumentStatusResponse(
@@ -95,7 +98,18 @@ async def get_document_status(document_id: str):
 
 
 @router.get("/{document_id}/chunks", response_model=list[ChunkOut])
-async def get_document_chunks(document_id: str):
+async def get_document_chunks(document_id: str, user: UserContext = Depends(get_current_user)):
+    """`repositories/` 用 service_role key bypass RLS，tenant_id 與 viewer confidentiality
+    過濾必須在這層做（見 CLAUDE.md 雙層權限隔離），比照 `/citation` 端點的保護等級——
+    這裡回傳的是完整解析內文，敏感度與 citation 相同。
+    """
+    documents_repo = DocumentsRepository()
+    doc = documents_repo.get(document_id)
+    if doc is None or doc["tenant_id"] != user.tenant_id:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    if user.role == "viewer" and doc["confidentiality"] not in VIEWER_ALLOWED_CONFIDENTIALITY:
+        raise HTTPException(status_code=403, detail="權限不足")
+
     chunks_repo = ChunksRepository()
     return chunks_repo.list_by_document(document_id)
 
