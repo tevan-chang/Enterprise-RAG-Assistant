@@ -1,15 +1,22 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useAuth } from "@/lib/auth-context";
+import { useUploadModal } from "@/lib/upload-modal-context";
 import { getDocumentStatus, uploadDocument, type ProcessingStatus } from "@/lib/api";
 
 const TERMINAL_STATUSES = new Set<ProcessingStatus>(["completed", "failed"]);
@@ -22,8 +29,10 @@ const STATUS_LABEL: Record<ProcessingStatus, string> = {
   failed: "失敗",
 };
 
-export default function UploadPage() {
-  const { session, isLoading } = useAuth();
+export function UploadDocumentModal() {
+  const { isOpen, close } = useUploadModal();
+  const { session } = useAuth();
+  const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [documentId, setDocumentId] = useState<string | null>(null);
 
@@ -32,7 +41,10 @@ export default function UploadPage() {
       if (!file) throw new Error("請先選擇檔案");
       return uploadDocument(file, session!.access_token);
     },
-    onSuccess: (data) => setDocumentId(data.document_id),
+    onSuccess: (data) => {
+      setDocumentId(data.document_id);
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
+    },
   });
 
   const statusQuery = useQuery({
@@ -41,25 +53,42 @@ export default function UploadPage() {
     enabled: documentId !== null && !!session,
     refetchInterval: (query) => {
       const status = query.state.data?.processing_status;
-      return status && TERMINAL_STATUSES.has(status) ? false : 2000;
+      if (status && TERMINAL_STATUSES.has(status)) {
+        queryClient.invalidateQueries({ queryKey: ["documents"] });
+        return false;
+      }
+      return 2000;
     },
   });
 
   const status = statusQuery.data?.processing_status;
 
-  if (isLoading || !session) {
-    return <main className="mx-auto max-w-xl p-6 text-sm text-muted-foreground">載入中...</main>;
+  function resetState() {
+    setFile(null);
+    setDocumentId(null);
+    uploadMutation.reset();
+  }
+
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen) {
+      close();
+      resetState();
+    }
+  }
+
+  if (!session) {
+    return null;
   }
 
   return (
-    <main className="mx-auto flex max-w-xl flex-col gap-4 p-6">
-      <h1 className="text-xl font-semibold">上傳文件</h1>
+    <Dialog open={isOpen} onOpenChange={handleOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>上傳文件</DialogTitle>
+          <DialogDescription>支援 PDF / XLSX，上傳後會自動進入解析與向量化流程。</DialogDescription>
+        </DialogHeader>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>PDF / XLSX 上傳</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
+        <div className="flex flex-col gap-4">
           <Input
             type="file"
             accept=".pdf,.xlsx"
@@ -80,25 +109,23 @@ export default function UploadPage() {
               {status && !TERMINAL_STATUSES.has(status) && (
                 <Loader2 className="size-4 animate-spin text-muted-foreground" />
               )}
-              <span>文件 ID：{documentId}</span>
+              <span className="truncate">文件 ID：{documentId}</span>
               <Badge variant={status === "failed" ? "destructive" : "secondary"}>
                 {status ? STATUS_LABEL[status] : "查詢中"}
               </Badge>
             </div>
           )}
-        </CardContent>
-        <CardFooter className="flex items-center justify-between">
+        </div>
+
+        <DialogFooter>
           <Button
             onClick={() => uploadMutation.mutate()}
             disabled={!file || uploadMutation.isPending}
           >
             {uploadMutation.isPending ? "上傳中..." : "上傳"}
           </Button>
-          <Link href="/documents" className="text-sm text-primary underline-offset-4 hover:underline">
-            查看文件列表 →
-          </Link>
-        </CardFooter>
-      </Card>
-    </main>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

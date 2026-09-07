@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatCard } from "@/components/stat-card";
 import { useAuth } from "@/lib/auth-context";
+import { useUploadModal } from "@/lib/upload-modal-context";
 import { PROCESSING_STATUS_LABEL, STATUS_BADGE_CLASS, deriveDocumentStats } from "@/lib/document-status";
 import { listDocuments } from "@/lib/api";
 
@@ -24,16 +25,11 @@ const QUICK_LINKS = [
     description: "檢視處理進度、分類狀態，並可整理／解鎖分類",
     icon: FileText,
   },
-  {
-    href: "/documents/upload",
-    label: "上傳文件",
-    description: "上傳 PDF 或 XLSX，進入解析與向量化流程",
-    icon: Upload,
-  },
 ];
 
 export default function Home() {
   const { session, isLoading } = useAuth();
+  const { open: openUploadModal } = useUploadModal();
 
   const documentsQuery = useQuery({
     queryKey: ["documents", session?.user.id],
@@ -92,6 +88,17 @@ export default function Home() {
             </Card>
           </Link>
         ))}
+        <button type="button" onClick={openUploadModal} className="text-left">
+          <Card className="h-full transition-colors hover:border-primary/50 hover:bg-accent/40">
+            <CardContent className="flex flex-col gap-2">
+              <span className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Upload className="size-4" />
+              </span>
+              <p className="font-medium">上傳文件</p>
+              <p className="text-xs text-muted-foreground">上傳 PDF 或 XLSX，進入解析與向量化流程</p>
+            </CardContent>
+          </Card>
+        </button>
       </div>
 
       <Card>

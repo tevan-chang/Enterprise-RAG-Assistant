@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
@@ -19,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/stat-card";
 import { useAuth } from "@/lib/auth-context";
+import { useUploadModal } from "@/lib/upload-modal-context";
 import {
   PROCESSING_STATUS_LABEL,
   STATUS_BADGE_CLASS,
@@ -183,6 +183,7 @@ function DocumentRow({ doc }: { doc: DocumentListItem }) {
 
 export default function DocumentsPage() {
   const { session, isLoading } = useAuth();
+  const { open: openUploadModal } = useUploadModal();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   const documentsQuery = useQuery({
@@ -206,9 +207,9 @@ export default function DocumentsPage() {
     <main className="mx-auto flex max-w-4xl flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">文件列表</h1>
-        <Link href="/documents/upload" className="text-sm text-primary underline-offset-4 hover:underline">
+        <Button size="sm" onClick={openUploadModal}>
           + 上傳新文件
-        </Link>
+        </Button>
       </div>
 
       {documentsQuery.isError && (

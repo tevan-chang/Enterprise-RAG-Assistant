@@ -2,20 +2,21 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FileText, MessageSquare, NotebookText, Sparkles, Upload } from "lucide-react";
+import { FileText, MessageSquare, NotebookText, Sparkles } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
+import { UploadModalProvider } from "@/lib/upload-modal-context";
 import { SignOutButton } from "@/components/sign-out-button";
+import { UploadDocumentModal } from "@/components/upload-document-modal";
 
-const NAV_ITEMS = [
+const NAV_LINK_ITEMS = [
   { href: "/chat", label: "知識問答", icon: MessageSquare },
   { href: "/report", label: "報告生成", icon: NotebookText },
   { href: "/documents", label: "文件列表", icon: FileText },
-  { href: "/documents/upload", label: "上傳文件", icon: Upload },
 ];
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+function NavContent({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { user, role, isLoading } = useAuth();
 
@@ -34,7 +35,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </Link>
 
         <nav className="flex flex-1 flex-col gap-1 px-3">
-          {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
+          {NAV_LINK_ITEMS.map(({ href, label, icon: Icon }) => {
             const active = pathname === href;
             return (
               <Link
@@ -66,6 +67,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </aside>
 
       <main className="flex-1 overflow-y-auto">{children}</main>
+      <UploadDocumentModal />
     </div>
+  );
+}
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <UploadModalProvider>
+      <NavContent>{children}</NavContent>
+    </UploadModalProvider>
   );
 }
