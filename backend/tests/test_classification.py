@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.services.classification import on_file_reupload
+from app.services.classification import flag_for_review, on_file_reupload
 
 _MODULE = "app.services.classification"
 
@@ -56,6 +56,14 @@ def test_on_file_reupload_skips_when_not_locked():
 
     assert triggered is False
     mock_flag.assert_not_called()
+
+
+def test_flag_for_review_reports_to_sentry():
+    with patch(f"{_MODULE}.sentry_sdk") as mock_sentry:
+        flag_for_review("doc-1")
+
+    mock_sentry.capture_message.assert_called_once()
+    assert "doc-1" in mock_sentry.capture_message.call_args.args[0]
 
 
 def test_on_file_reupload_raises_when_document_missing():

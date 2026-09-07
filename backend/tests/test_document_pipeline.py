@@ -118,6 +118,45 @@ async def test_process_xlsx_document_skips_fallback_when_parsing_succeeds():
         assert _final_status(documents_repo) == "completed"
 
 
+async def test_process_xlsx_document_persists_structured_sheets_for_report_mode():
+    """成功解析時要把結構化表格存進 documents.xlsx_sheets，供 Day 8 Report Mode 的
+    compute_table_metric 還原 DataFrame 用；fallback 路徑（純文字）沒有結構化資料可存。
+    """
+    with (
+        patch(f"{_MODULE}.DocumentsRepository") as MockDocumentsRepo,
+        patch(f"{_MODULE}.ChunksRepository"),
+        patch(f"{_MODULE}.extract_xlsx_sheets", return_value=[_sheet_frame()]),
+        patch(f"{_MODULE}.LlamaParseAdapter"),
+        patch(f"{_MODULE}.embed_texts", new=_mock_embed_texts()),
+    ):
+        documents_repo = MockDocumentsRepo.return_value
+
+        await process_xlsx_document("doc-2", "tenant_a", b"file-bytes", "a.xlsx")
+
+        documents_repo.update_xlsx_sheets.assert_called_once()
+        doc_id, xlsx_sheets = documents_repo.update_xlsx_sheets.call_args.args
+        assert doc_id == "doc-2"
+        assert set(xlsx_sheets.keys()) == {"Sheet1"}
+        assert xlsx_sheets["Sheet1"]["columns"] == ["A", "B"]
+        assert xlsx_sheets["Sheet1"]["data"] == [[1, 3], [2, 4]]
+
+
+async def test_process_xlsx_document_fallback_path_does_not_persist_structured_sheets():
+    with (
+        patch(f"{_MODULE}.DocumentsRepository") as MockDocumentsRepo,
+        patch(f"{_MODULE}.ChunksRepository"),
+        patch(f"{_MODULE}.extract_xlsx_sheets", side_effect=XLSXParsingError("boom")),
+        patch(f"{_MODULE}.LlamaParseAdapter") as MockAdapter,
+        patch(f"{_MODULE}.embed_texts", new=_mock_embed_texts()),
+    ):
+        documents_repo = MockDocumentsRepo.return_value
+        MockAdapter.return_value.parse = AsyncMock(return_value="fallback markdown content")
+
+        await process_xlsx_document("doc-2", "tenant_a", b"file-bytes", "a.xlsx")
+
+        documents_repo.update_xlsx_sheets.assert_not_called()
+
+
 async def test_process_xlsx_document_marks_failed_when_fallback_also_fails():
     with (
         patch(f"{_MODULE}.DocumentsRepository") as MockDocumentsRepo,

@@ -38,6 +38,12 @@ class DocumentsRepository:
             }
         ).eq("id", document_id).execute()
 
+    def update_xlsx_sheets(self, document_id: str, xlsx_sheets: dict) -> None:
+        """XLSX 解析成功時存結構化表格資料（見 roadmap Day 8 Schema-First Strategy），
+        供 Report Mode 的 `compute_table_metric` 還原 DataFrame 做精確運算用。
+        """
+        self._client.table("documents").update({"xlsx_sheets": xlsx_sheets}).eq("id", document_id).execute()
+
     def find_zombie_tasks(self, timeout_minutes: int) -> list[dict]:
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)).isoformat()
         resp = (

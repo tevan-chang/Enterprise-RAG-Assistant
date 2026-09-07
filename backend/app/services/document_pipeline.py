@@ -1,5 +1,7 @@
 import logging
 
+import sentry_sdk
+
 from app.adapters.llamaparse_adapter import FallbackParsingError, LlamaParseAdapter
 from app.config import settings
 from app.repositories.chunks_repository import ChunksRepository
@@ -7,7 +9,7 @@ from app.repositories.documents_repository import DocumentsRepository
 from app.services.chunker import Chunk, chunk_pages, chunk_plain_text, chunk_xlsx_sheets
 from app.services.embeddings import EmbeddingError, embed_texts
 from app.services.pdf_parser import PageText, PDFParsingError, extract_pdf_pages
-from app.services.xlsx_parser import XLSXParsingError, extract_xlsx_sheets
+from app.services.xlsx_parser import XLSXParsingError, extract_xlsx_sheets, sheets_to_json
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,7 @@ async def _embed_and_store_chunks(
         vectors = await embed_texts([chunk.content for chunk in chunks])
     except EmbeddingError as exc:
         logger.error("chunk embedding 生成失敗: doc=%s err=%s", document_id, exc)
+        sentry_sdk.capture_exception(exc)
         documents_repo.update_status(document_id, "failed")
         return
 
@@ -61,9 +64,11 @@ async def process_pdf_document(document_id: str, tenant_id: str, file_bytes: byt
         await _embed_and_store_chunks(document_id, tenant_id, chunks, documents_repo, chunks_repo)
     except (PDFParsingError, FallbackParsingError) as exc:
         logger.error("文件解析失敗（含 fallback）: doc=%s err=%s", document_id, exc)
+        sentry_sdk.capture_exception(exc)
         documents_repo.update_status(document_id, "failed")
-    except Exception:
+    except Exception as exc:
         logger.exception("文件處理管線發生未預期錯誤: doc=%s", document_id)
+        sentry_sdk.capture_exception(exc)
         documents_repo.update_status(document_id, "failed")
 
 
@@ -75,6 +80,7 @@ async def process_xlsx_document(document_id: str, tenant_id: str, file_bytes: by
     try:
         try:
             sheets = extract_xlsx_sheets(file_bytes)
+            documents_repo.update_xlsx_sheets(document_id, sheets_to_json(sheets))
             documents_repo.update_status(document_id, "chunking")
             chunks = chunk_xlsx_sheets(sheets, settings.chunk_size_tokens)
         except XLSXParsingError as exc:
@@ -86,7 +92,9 @@ async def process_xlsx_document(document_id: str, tenant_id: str, file_bytes: by
         await _embed_and_store_chunks(document_id, tenant_id, chunks, documents_repo, chunks_repo)
     except (XLSXParsingError, FallbackParsingError) as exc:
         logger.error("文件解析失敗（含 fallback）: doc=%s err=%s", document_id, exc)
+        sentry_sdk.capture_exception(exc)
         documents_repo.update_status(document_id, "failed")
-    except Exception:
+    except Exception as exc:
         logger.exception("文件處理管線發生未預期錯誤: doc=%s", document_id)
+        sentry_sdk.capture_exception(exc)
         documents_repo.update_status(document_id, "failed")

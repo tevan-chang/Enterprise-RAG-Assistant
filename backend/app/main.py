@@ -5,11 +5,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import chat, documents
+from app.observability import init_sentry
+from app.routers import chat, documents, reports
 from app.services.zombie_cleanup import cleanup_zombie_tasks
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+init_sentry()
 
 
 @asynccontextmanager
@@ -34,6 +37,7 @@ app.add_middleware(
 
 app.include_router(documents.router)
 app.include_router(chat.router)
+app.include_router(reports.router)
 
 
 @app.get("/health")

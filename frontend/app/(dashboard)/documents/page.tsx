@@ -19,7 +19,6 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/stat-card";
 import { useAuth } from "@/lib/auth-context";
-import { cn } from "@/lib/utils";
 import {
   PROCESSING_STATUS_LABEL,
   STATUS_BADGE_CLASS,
