@@ -68,15 +68,19 @@ async def query_documents(
     tenant_id: str,
     role: str,
     top_k: int = 3,
+    departments: list[str] | None = None,
     retriever: DenseRetriever | None = None,
 ) -> list[dict]:
     """`query_documents` tool 實作：包裝既有 DenseRetriever（見 spec §2.4）。
 
-    tenant_id/role 一律由呼叫端（已驗證的 request context）注入，不對 LLM 開放這兩個參數，
-    避免 tool-calling 被誘導跨租戶檢索。
+    tenant_id/role/departments 一律由呼叫端（已驗證的 request context）注入，不對 LLM 開放
+    這三個參數，避免 tool-calling 被誘導跨租戶檢索或繞過 department-scoped 過濾
+    （比照 chat.py 的 departments 轉發邏輯）。
     """
     retriever = retriever or DenseRetriever()
-    chunks = await retriever.retrieve(query=query, tenant_id=tenant_id, top_k=top_k, role=role)
+    chunks = await retriever.retrieve(
+        query=query, tenant_id=tenant_id, top_k=top_k, role=role, departments=departments
+    )
     return [{"label": _format_chunk_label(chunk), "content": chunk["content"]} for chunk in chunks]
 
 

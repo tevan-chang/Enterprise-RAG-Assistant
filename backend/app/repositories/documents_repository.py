@@ -62,9 +62,12 @@ class DocumentsRepository:
             "id", document_ids
         ).execute()
 
-    def reorganize(self, document_id: str, manual_categories: list[str]) -> dict | None:
+    def reorganize(self, document_id: str, manual_categories: list[str], tenant_id: str) -> dict | None:
         """手動整理：寫入 manual_categories，final_categories 以人工結果為準，
         狀態鎖升級為 manually_verified（見 spec §4.2 雙軌分類鎖機制）。
+
+        `tenant_id` 直接帶進 WHERE 條件（比照 `delete()`），因為本 client 用 service_role
+        key bypass RLS，不能只靠 DB 擋跨租戶操作（見 CLAUDE.md 雙層權限隔離）。
         """
         resp = (
             self._client.table("documents")
@@ -77,13 +80,35 @@ class DocumentsRepository:
                 }
             )
             .eq("id", document_id)
+            .eq("tenant_id", tenant_id)
             .execute()
         )
         return resp.data[0] if resp.data else None
 
-    def unlock_bulk(self, document_ids: list[str]) -> list[dict]:
+    def delete(self, document_id: str, tenant_id: str) -> dict | None:
+        """刪除文件（見 spec §10 端點定義：刪除檔案並觸發向量 Cascade 清理）。
+
+        `tenant_id` 直接帶進 DELETE 的 WHERE 條件，因為本 client 用 service_role key
+        bypass RLS（見 app/db.py），不能只靠 DB RLS 擋跨租戶操作（見 CLAUDE.md 雙層權限
+        隔離）；`document_chunks` 對應的向量透過既有 FK `on delete cascade` 自動清除，
+        不需要額外程式碼。
+        """
+        resp = (
+            self._client.table("documents")
+            .delete()
+            .eq("id", document_id)
+            .eq("tenant_id", tenant_id)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def unlock_bulk(self, document_ids: list[str], tenant_id: str) -> list[dict]:
         """批次解鎖：僅對目前已鎖定（manually_verified）的文件生效，狀態鎖降級為
         auto_labeled，讓背景自動分類排程可以重新覆蓋（見 spec §4.2）。
+
+        `tenant_id` 直接帶進 WHERE 條件（比照 `delete()`），跨租戶的 document_id 會被
+        過濾掉、不影響任何列，因為本 client 用 service_role key bypass RLS，不能只靠
+        DB 擋跨租戶操作（見 CLAUDE.md 雙層權限隔離）。
         """
         if not document_ids:
             return []
@@ -96,6 +121,7 @@ class DocumentsRepository:
                 }
             )
             .in_("id", document_ids)
+            .eq("tenant_id", tenant_id)
             .eq("classification_status", "manually_verified")
             .execute()
         )

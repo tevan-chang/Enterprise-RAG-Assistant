@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from fastapi.testclient import TestClient
 
 from app.dependencies.auth import UserContext, get_current_user
@@ -27,6 +27,184 @@ def _as_user(tenant_id: str = "tenant_a", role: str = "admin", user_id: str = "u
     _test_app.dependency_overrides[get_current_user] = lambda: UserContext(
         user_id=user_id, tenant_id=tenant_id, role=role
     )
+
+
+def test_upload_as_viewer_returns_403():
+    """spec §3.2：Viewer 僅限提問與檢索，無權上傳（比照 reorganize 的 require_role 寫法）。"""
+    _as_user(role="viewer")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository") as MockRepo,
+        patch.object(BackgroundTasks, "add_task") as mock_add_task,
+    ):
+        resp = client.post(
+            "/api/documents/upload",
+            files={"file": ("a.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+
+    assert resp.status_code == 403
+    MockRepo.return_value.create.assert_not_called()
+    mock_add_task.assert_not_called()
+
+
+def test_upload_as_editor_or_admin_succeeds():
+    for role in ("editor", "admin"):
+        repo = MagicMock()
+        repo.create.return_value = {"id": "doc-1", "processing_status": "parsing"}
+        _as_user(role=role, tenant_id="tenant_a")
+
+        with (
+            patch(f"{_MODULE}.DocumentsRepository", return_value=repo),
+            patch.object(BackgroundTasks, "add_task"),
+        ):
+            resp = client.post(
+                "/api/documents/upload",
+                files={"file": ("a.pdf", b"%PDF-1.4 fake", "application/pdf")},
+            )
+
+        assert resp.status_code == 200, f"role={role} 應允許上傳"
+        assert resp.json() == {"document_id": "doc-1", "processing_status": "parsing"}
+
+
+def test_upload_rejects_unsupported_content_type_returns_422():
+    _as_user(role="editor")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository") as MockRepo,
+        patch.object(BackgroundTasks, "add_task") as mock_add_task,
+    ):
+        resp = client.post(
+            "/api/documents/upload",
+            files={
+                "file": (
+                    "a.docx",
+                    b"fake docx bytes",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+        )
+
+    assert resp.status_code == 422
+    MockRepo.return_value.create.assert_not_called()
+    mock_add_task.assert_not_called()
+
+
+def test_upload_pdf_triggers_background_task_with_correct_pipeline():
+    repo = MagicMock()
+    repo.create.return_value = {"id": "doc-1", "processing_status": "parsing"}
+    _as_user(role="editor", tenant_id="tenant_a")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository", return_value=repo),
+        patch.object(BackgroundTasks, "add_task") as mock_add_task,
+    ):
+        resp = client.post(
+            "/api/documents/upload",
+            files={"file": ("a.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+
+    assert resp.status_code == 200
+    mock_add_task.assert_called_once()
+    args, kwargs = mock_add_task.call_args
+    assert args[0] is documents.process_pdf_document
+    assert kwargs == {
+        "document_id": "doc-1",
+        "tenant_id": "tenant_a",
+        "file_bytes": b"%PDF-1.4 fake",
+        "file_name": "a.pdf",
+    }
+
+
+def test_upload_xlsx_triggers_background_task_with_correct_pipeline():
+    repo = MagicMock()
+    repo.create.return_value = {"id": "doc-2", "processing_status": "parsing"}
+    _as_user(role="admin", tenant_id="tenant_a")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository", return_value=repo),
+        patch.object(BackgroundTasks, "add_task") as mock_add_task,
+    ):
+        resp = client.post(
+            "/api/documents/upload",
+            files={"file": ("b.xlsx", b"fake xlsx bytes", documents._XLSX_CONTENT_TYPE)},
+        )
+
+    assert resp.status_code == 200
+    mock_add_task.assert_called_once()
+    args, kwargs = mock_add_task.call_args
+    assert args[0] is documents.process_xlsx_document
+    assert kwargs == {
+        "document_id": "doc-2",
+        "tenant_id": "tenant_a",
+        "file_bytes": b"fake xlsx bytes",
+        "file_name": "b.xlsx",
+    }
+
+
+def test_upload_without_authorization_header_returns_422():
+    resp = client.post(
+        "/api/documents/upload",
+        files={"file": ("a.pdf", b"%PDF-1.4 fake", "application/pdf")},
+    )
+
+    assert resp.status_code == 422
+
+
+def test_delete_document_as_viewer_returns_403():
+    """spec §3.2：Viewer 無權上傳/修改/刪除，比照 reorganize 的 require_role 寫法。"""
+    _as_user(role="viewer")
+
+    with patch(f"{_MODULE}.DocumentsRepository") as MockRepo:
+        resp = client.delete("/api/documents/doc-1")
+
+    assert resp.status_code == 403
+    MockRepo.return_value.delete.assert_not_called()
+
+
+def test_delete_document_as_editor_or_admin_succeeds():
+    for role in ("editor", "admin"):
+        repo = MagicMock()
+        repo.delete.return_value = {"id": "doc-1"}
+        _as_user(role=role, tenant_id="tenant_a")
+
+        with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
+            resp = client.delete("/api/documents/doc-1")
+
+        assert resp.status_code == 200, f"role={role} 應允許刪除"
+        assert resp.json() == {"document_id": "doc-1"}
+        repo.delete.assert_called_once_with("doc-1", tenant_id="tenant_a")
+
+
+def test_delete_document_cross_tenant_returns_404():
+    """DocumentsRepository.delete() 的 WHERE 條件直接帶 tenant_id（見該方法註解：
+    repositories 用 service_role bypass RLS），跨租戶刪除等同 0 筆命中，回傳 None。
+    """
+    repo = MagicMock()
+    repo.delete.return_value = None
+    _as_user(role="editor", tenant_id="tenant_a")
+
+    with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
+        resp = client.delete("/api/documents/doc-1")
+
+    assert resp.status_code == 404
+    repo.delete.assert_called_once_with("doc-1", tenant_id="tenant_a")
+
+
+def test_delete_document_missing_returns_404():
+    repo = MagicMock()
+    repo.delete.return_value = None
+    _as_user(role="admin", tenant_id="tenant_a")
+
+    with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
+        resp = client.delete("/api/documents/missing")
+
+    assert resp.status_code == 404
+
+
+def test_delete_document_without_authorization_header_returns_422():
+    resp = client.delete("/api/documents/doc-1")
+
+    assert resp.status_code == 422
 
 
 def test_list_documents_scoped_by_tenant():
@@ -85,7 +263,7 @@ def test_reorganize_as_editor_upgrades_to_manually_verified():
 
     assert resp.status_code == 200
     assert resp.json()["classification_status"] == "manually_verified"
-    repo.reorganize.assert_called_once_with("doc-1", ["2026核心資料"])
+    repo.reorganize.assert_called_once_with("doc-1", ["2026核心資料"], tenant_id="tenant_a")
 
 
 def test_reorganize_as_viewer_returns_403():
@@ -115,10 +293,28 @@ def test_reorganize_missing_document_returns_404():
     assert resp.status_code == 404
 
 
+def test_reorganize_cross_tenant_returns_404():
+    """DocumentsRepository.reorganize() 的 WHERE 條件直接帶 tenant_id（比照 delete()），
+    跨租戶等同 0 筆命中，回傳 None，和「文件不存在」一律回 404，不特別區分。
+    """
+    repo = MagicMock()
+    repo.reorganize.return_value = None
+    _as_user(role="editor", tenant_id="tenant_a")
+
+    with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
+        resp = client.post(
+            "/api/documents/reorganize",
+            json={"document_id": "doc-1", "manual_categories": ["財務"]},
+        )
+
+    assert resp.status_code == 404
+    repo.reorganize.assert_called_once_with("doc-1", ["財務"], tenant_id="tenant_a")
+
+
 def test_unlock_as_admin_succeeds():
     repo = MagicMock()
     repo.unlock_bulk.return_value = [{"id": "doc-1"}, {"id": "doc-2"}]
-    _as_user(role="admin")
+    _as_user(role="admin", tenant_id="tenant_a")
 
     with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
         resp = client.post(
@@ -128,6 +324,26 @@ def test_unlock_as_admin_succeeds():
 
     assert resp.status_code == 200
     assert resp.json()["unlocked_document_ids"] == ["doc-1", "doc-2"]
+    repo.unlock_bulk.assert_called_once_with(["doc-1", "doc-2"], tenant_id="tenant_a")
+
+
+def test_unlock_excludes_cross_tenant_document_ids():
+    """跨租戶的 document_id 會被 WHERE 條件過濾掉、不影響任何列（比照 delete()/reorganize()），
+    與既有「僅對已鎖定文件生效」的部分成功語意一致，不需要另外回錯誤。
+    """
+    repo = MagicMock()
+    repo.unlock_bulk.return_value = [{"id": "doc-1"}]
+    _as_user(role="admin", tenant_id="tenant_a")
+
+    with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
+        resp = client.post(
+            "/api/documents/unlock",
+            json={"document_ids": ["doc-1", "doc-in-tenant-b"]},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["unlocked_document_ids"] == ["doc-1"]
+    repo.unlock_bulk.assert_called_once_with(["doc-1", "doc-in-tenant-b"], tenant_id="tenant_a")
 
 
 def test_unlock_as_non_admin_returns_403():

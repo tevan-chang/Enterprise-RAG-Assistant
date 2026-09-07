@@ -79,3 +79,7 @@ class UnlockRequest(BaseModel):
 
 class UnlockResponse(BaseModel):
     unlocked_document_ids: list[str]
+
+
+class DocumentDeleteResponse(BaseModel):
+    document_id: str

@@ -171,7 +171,22 @@ async def test_query_documents_wraps_dense_retriever_and_formats_labels():
     results = await query_documents(query="營收多少", tenant_id="tenant_a", role="admin", retriever=retriever)
 
     assert results == [{"label": "2026Q2.xlsx，工作表：營收明細 B2:D15", "content": "營收內容"}]
-    retriever.retrieve.assert_awaited_once_with(query="營收多少", tenant_id="tenant_a", top_k=3, role="admin")
+    retriever.retrieve.assert_awaited_once_with(
+        query="營收多少", tenant_id="tenant_a", top_k=3, role="admin", departments=None
+    )
+
+
+async def test_query_documents_forwards_departments_to_retriever():
+    retriever = MagicMock()
+    retriever.retrieve = AsyncMock(return_value=[])
+
+    await query_documents(
+        query="營收多少", tenant_id="tenant_a", role="editor", departments=["財務部"], retriever=retriever
+    )
+
+    retriever.retrieve.assert_awaited_once_with(
+        query="營收多少", tenant_id="tenant_a", top_k=3, role="editor", departments=["財務部"]
+    )
 
 
 def test_build_xlsx_schema_summary_excludes_full_table():

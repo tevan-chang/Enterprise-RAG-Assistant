@@ -18,5 +18,7 @@ async def generate_report(
     tenant_id/role 一律由已驗證的 JWT 帶出，不接受 request body 指定
     （見 CLAUDE.md 雙層權限隔離），Viewer 的 confidentiality 過濾在 service 層處理。
     """
-    result = await run_report_tool_calling(query=payload.query, tenant_id=user.tenant_id, role=user.role)
+    result = await run_report_tool_calling(
+        query=payload.query, tenant_id=user.tenant_id, role=user.role, departments=payload.departments
+    )
     return ReportGenerateResponse(content=result["content"] or "", tool_calls=result["tool_calls"])

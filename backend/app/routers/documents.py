@@ -9,6 +9,7 @@ from app.repositories.documents_repository import DocumentsRepository
 from app.schemas.documents import (
     ChunkOut,
     CitationDetailResponse,
+    DocumentDeleteResponse,
     DocumentListItem,
     DocumentStatusResponse,
     DocumentUploadResponse,
@@ -32,7 +33,11 @@ _EDITOR_ROLES = {"admin", "editor"}
 _ADMIN_ROLES = {"admin"}
 
 
-@router.post("/upload", response_model=DocumentUploadResponse)
+@router.post(
+    "/upload",
+    response_model=DocumentUploadResponse,
+    dependencies=[Depends(require_role(_EDITOR_ROLES))],
+)
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile,
@@ -155,14 +160,37 @@ async def get_citation(
     )
 
 
-@router.post("/reorganize", response_model=ReorganizeResponse, dependencies=[Depends(require_role(_EDITOR_ROLES))])
-async def reorganize_document(payload: ReorganizeRequest):
-    """手動整理：狀態鎖升級為 manually_verified（見 spec §4.2 / roadmap Day 5）。
+@router.delete(
+    "/{document_id}",
+    response_model=DocumentDeleteResponse,
+    dependencies=[Depends(require_role(_EDITOR_ROLES))],
+)
+async def delete_document(document_id: str, user: UserContext = Depends(get_current_user)):
+    """刪除文件（見 spec §10 端點定義：刪除檔案並觸發向量 Cascade 清理）。限 Editor/Admin，
+    同租戶內任何文件皆可刪除，不區分上傳者（粗粒度授權，見 roadmap Day 9-10 Buffer 盤點）。
 
-    限 Editor/Admin，Viewer 無權編輯標籤（見 spec §3.2）。
+    `DocumentsRepository.delete()` 的 WHERE 條件直接帶 tenant_id（見該方法註解：
+    repositories 用 service_role bypass RLS，不能只靠 DB 擋跨租戶操作），因此跨租戶
+    或文件不存在都會回傳 None，這裡統一回 404，不特別區分兩種情況。
     """
     documents_repo = DocumentsRepository()
-    doc = documents_repo.reorganize(payload.document_id, payload.manual_categories)
+    deleted = documents_repo.delete(document_id, tenant_id=user.tenant_id)
+    if deleted is None:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    return DocumentDeleteResponse(document_id=deleted["id"])
+
+
+@router.post("/reorganize", response_model=ReorganizeResponse, dependencies=[Depends(require_role(_EDITOR_ROLES))])
+async def reorganize_document(payload: ReorganizeRequest, user: UserContext = Depends(get_current_user)):
+    """手動整理：狀態鎖升級為 manually_verified（見 spec §4.2 / roadmap Day 5）。
+
+    限 Editor/Admin，Viewer 無權編輯標籤（見 spec §3.2）。`DocumentsRepository.reorganize()`
+    的 WHERE 條件直接帶 tenant_id（比照 `delete()`，見該方法註解：repositories 用
+    service_role bypass RLS，不能只靠 DB 擋跨租戶操作），跨租戶或文件不存在皆回 404。
+    """
+    documents_repo = DocumentsRepository()
+    doc = documents_repo.reorganize(payload.document_id, payload.manual_categories, tenant_id=user.tenant_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="文件不存在")
 
@@ -174,8 +202,13 @@ async def reorganize_document(payload: ReorganizeRequest):
 
 
 @router.post("/unlock", response_model=UnlockResponse, dependencies=[Depends(require_role(_ADMIN_ROLES))])
-async def unlock_documents(payload: UnlockRequest):
-    """批次解鎖：狀態鎖降級為 auto_labeled，限 Admin（見 spec §3.2 / roadmap Day 5）。"""
+async def unlock_documents(payload: UnlockRequest, user: UserContext = Depends(get_current_user)):
+    """批次解鎖：狀態鎖降級為 auto_labeled，限 Admin（見 spec §3.2 / roadmap Day 5）。
+
+    `DocumentsRepository.unlock_bulk()` 的 WHERE 條件直接帶 tenant_id（比照 `delete()`），
+    跨租戶的 document_id 會被過濾掉、不會出現在回傳的 unlocked_document_ids 中——
+    與既有「僅對已鎖定文件生效」的部分成功語意一致，不需要另外回錯誤。
+    """
     documents_repo = DocumentsRepository()
-    unlocked = documents_repo.unlock_bulk(payload.document_ids)
+    unlocked = documents_repo.unlock_bulk(payload.document_ids, tenant_id=user.tenant_id)
     return UnlockResponse(unlocked_document_ids=[doc["id"] for doc in unlocked])

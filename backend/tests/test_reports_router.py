@@ -46,7 +46,35 @@ def test_generate_report_returns_content_and_tool_calls_and_forwards_identity():
 
     assert resp.status_code == 200
     assert resp.json() == fake_result
-    mock_run.assert_awaited_once_with(query="業績加總多少", tenant_id="tenant_a", role="editor")
+    mock_run.assert_awaited_once_with(
+        query="業績加總多少", tenant_id="tenant_a", role="editor", departments=None
+    )
+
+
+def test_generate_report_forwards_departments():
+    """比照 test_chat_router.py 的 departments 轉發驗證：router 需把 payload.departments
+    轉發給 service，避免 report_tools.py 的 query_documents 收不到 department 過濾條件。
+    """
+    _as_user(tenant_id="tenant_a", role="editor")
+    captured_kwargs = {}
+
+    async def _capturing_run(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {"content": "報告內容", "tool_calls": []}
+
+    with patch(f"{_MODULE}.run_report_tool_calling", side_effect=_capturing_run):
+        resp = client.post(
+            "/api/reports/generate",
+            json={"query": "業績加總多少", "departments": ["財務部"]},
+        )
+
+    assert resp.status_code == 200
+    assert captured_kwargs == {
+        "query": "業績加總多少",
+        "tenant_id": "tenant_a",
+        "role": "editor",
+        "departments": ["財務部"],
+    }
 
 
 def test_generate_report_without_authorization_header_returns_422():

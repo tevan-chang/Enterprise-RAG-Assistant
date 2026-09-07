@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class ReportGenerateRequest(BaseModel):
     query: str = Field(min_length=1)
+    departments: list[str] | None = None
 
     @field_validator("query")
     @classmethod

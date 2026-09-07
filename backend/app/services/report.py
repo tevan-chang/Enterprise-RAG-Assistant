@@ -40,7 +40,7 @@ def _build_system_prompt(tenant_id: str, role: str) -> str:
     return _SYSTEM_PROMPT_TEMPLATE.format(schema_summary=schema_text)
 
 
-async def _dispatch_tool_call(tool_call, tenant_id: str, role: str) -> dict:
+async def _dispatch_tool_call(tool_call, tenant_id: str, role: str, departments: list[str] | None = None) -> dict:
     try:
         args = json.loads(tool_call.function.arguments or "{}")
     except json.JSONDecodeError as exc:
@@ -48,7 +48,11 @@ async def _dispatch_tool_call(tool_call, tenant_id: str, role: str) -> dict:
 
     if tool_call.function.name == "query_documents":
         results = await query_documents(
-            query=args.get("query", ""), tenant_id=tenant_id, role=role, top_k=args.get("top_k") or 3
+            query=args.get("query", ""),
+            tenant_id=tenant_id,
+            role=role,
+            top_k=args.get("top_k") or 3,
+            departments=departments,
         )
         return {"status": "success", "result": results}
 
@@ -70,10 +74,15 @@ async def _dispatch_tool_call(tool_call, tenant_id: str, role: str) -> dict:
     return {"status": "error", "error_type": "UnknownTool", "message": f"未知的 tool：{tool_call.function.name}"}
 
 
-async def run_report_tool_calling(query: str, tenant_id: str, role: str) -> dict:
+async def run_report_tool_calling(
+    query: str, tenant_id: str, role: str, departments: list[str] | None = None
+) -> dict:
     """Report Mode bounded tool-calling（見 spec §2.4 / CLAUDE.md Guardrail #5）：固定最多兩輪
     OpenAI 呼叫——第一輪決定要不要呼叫工具（可能同時呼叫多個），第二輪把工具結果收斂成最終回答，
     不做第二輪之後的追問或 reflection。`/api/reports/generate`（roadmap Day 9）直接呼叫本函式。
+
+    tenant_id/role/departments 一律由呼叫端（已驗證的 request context）注入，不對 LLM 開放
+    這三個參數（比照 chat.py 的 departments 轉發邏輯，見 CLAUDE.md 雙層權限隔離）。
 
     回傳 `{"content": <最終回答文字>, "tool_calls": [<實際執行的 tool call 記錄>]}`，
     tool_calls 供之後（Day 9）前端做 tool-calling 過程可視化用。
@@ -106,7 +115,7 @@ async def run_report_tool_calling(query: str, tenant_id: str, role: str) -> dict
 
     executed = []
     for tool_call in tool_calls:
-        result = await _dispatch_tool_call(tool_call, tenant_id=tenant_id, role=role)
+        result = await _dispatch_tool_call(tool_call, tenant_id=tenant_id, role=role, departments=departments)
         executed.append({"tool": tool_call.function.name, "arguments": tool_call.function.arguments, "result": result})
         messages.append(
             {

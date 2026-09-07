@@ -121,7 +121,32 @@ async def test_run_report_tool_calling_executes_query_documents():
         result = await run_report_tool_calling(query="財報重點是什麼", tenant_id="tenant_a", role="viewer")
 
     assert result["content"] == "根據檢索結果..."
-    fake_query.assert_awaited_once_with(query="財報重點", tenant_id="tenant_a", role="viewer", top_k=3)
+    fake_query.assert_awaited_once_with(
+        query="財報重點", tenant_id="tenant_a", role="viewer", top_k=3, departments=None
+    )
+
+
+async def test_run_report_tool_calling_forwards_departments_to_query_documents():
+    """report.py 的 departments 轉發需與 chat.py 一致，見 report_tools.py:79 的 query_documents。"""
+    tool_call = _FakeToolCall("call-5", "query_documents", json.dumps({"query": "財報重點", "top_k": 3}))
+    first_response = _FakeResponse(_FakeMessage(content=None, tool_calls=[tool_call]))
+    second_response = _FakeResponse(_FakeMessage(content="根據檢索結果..."))
+    client = _client_with_responses(first_response, second_response)
+
+    fake_query = AsyncMock(return_value=[{"label": "財報.pdf，第 1 頁", "content": "重點內容"}])
+
+    with (
+        patch(f"{_MODULE}._get_client", return_value=client),
+        patch(f"{_MODULE}.build_xlsx_schema_summary", return_value=[]),
+        patch(f"{_MODULE}.query_documents", new=fake_query),
+    ):
+        await run_report_tool_calling(
+            query="財報重點是什麼", tenant_id="tenant_a", role="viewer", departments=["財務部"]
+        )
+
+    fake_query.assert_awaited_once_with(
+        query="財報重點", tenant_id="tenant_a", role="viewer", top_k=3, departments=["財務部"]
+    )
 
 
 async def test_run_report_tool_calling_unknown_tool_name_returns_structured_error_without_crashing():
