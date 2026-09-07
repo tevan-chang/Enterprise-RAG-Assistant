@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { FileText, MessageSquare, Sparkles, Upload } from "lucide-react";
+import { FileText, MessageSquare, NotebookText, Sparkles, Upload } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
@@ -10,6 +10,7 @@ import { SignOutButton } from "@/components/sign-out-button";
 
 const NAV_ITEMS = [
   { href: "/chat", label: "知識問答", icon: MessageSquare },
+  { href: "/report", label: "報告生成", icon: NotebookText },
   { href: "/documents", label: "文件列表", icon: FileText },
   { href: "/documents/upload", label: "上傳文件", icon: Upload },
 ];

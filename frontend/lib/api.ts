@@ -46,6 +46,18 @@ export type CitationDetailResponse = {
   content: string;
 };
 
+/** Report Mode tool-calling 結果（見 backend/app/schemas/reports.py，roadmap Day 8-9）。 */
+export type ReportToolCall = {
+  tool: string;
+  arguments: string;
+  result: Record<string, unknown>;
+};
+
+export type ReportGenerateResponse = {
+  content: string;
+  tool_calls: ReportToolCall[];
+};
+
 class ApiError extends Error {
   constructor(
     public status: number,
@@ -124,6 +136,17 @@ export function unlockDocuments(documentIds: string[], accessToken: string): Pro
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ document_ids: documentIds }),
+  });
+}
+
+/** Report Mode（見 roadmap Day 8-9）：bounded tool-calling，回應比 Chat 慢（1-2 輪 LLM 呼叫），
+ * 走一般 JSON 回應而非 SSE（SSE 僅限 Chat 使用，見 CLAUDE.md Guardrail #3）。
+ */
+export function generateReport(query: string, accessToken: string): Promise<ReportGenerateResponse> {
+  return request<ReportGenerateResponse>("/api/reports/generate", accessToken, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query }),
   });
 }
 

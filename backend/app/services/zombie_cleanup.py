@@ -1,5 +1,7 @@
 import logging
 
+import sentry_sdk
+
 from app.config import settings
 from app.repositories.documents_repository import DocumentsRepository
 
@@ -20,12 +22,16 @@ def cleanup_zombie_tasks() -> int:
 
     repo.mark_failed_bulk([z["id"] for z in zombies])
     for z in zombies:
-        # TODO(Day 9): 改接 Sentry，目前先用 log 佔位（見 roadmap Day 3 DoD）
         logger.warning(
             "Zombie task 標記為 failed: doc_id=%s file_name=%s stale_status=%s updated_at=%s",
             z["id"],
             z["file_name"],
             z["processing_status"],
             z["updated_at"],
+        )
+        sentry_sdk.capture_message(
+            f"Zombie task 標記為 failed: doc_id={z['id']} file_name={z['file_name']} "
+            f"stale_status={z['processing_status']} updated_at={z['updated_at']}",
+            level="warning",
         )
     return len(zombies)

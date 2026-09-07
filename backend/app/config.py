@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     llama_cloud_api_key: str = ""
     openai_api_key: str = ""
+    sentry_dsn: str = ""
 
     chunk_size_tokens: int = 500
     chunk_overlap_tokens: int = 100

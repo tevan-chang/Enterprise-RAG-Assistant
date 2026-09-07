@@ -1,6 +1,8 @@
 import hashlib
 import logging
 
+import sentry_sdk
+
 from app.repositories.documents_repository import DocumentsRepository
 
 logger = logging.getLogger(__name__)
@@ -10,9 +12,10 @@ def flag_for_review(document_id: str) -> None:
     """已鎖定文件內容變更時觸發，警報通知 Admin（見 spec §4.3 / §2.1 情境 2）。
 
     TODO(Day 9-10): 改接 GmailAPINotificationAdapter 的 FLAG_FOR_REVIEW 情境，
-    目前先用 log 佔位（同 app/services/zombie_cleanup.py 的作法）。
+    目前先用 log + Sentry 佔位（同 app/services/zombie_cleanup.py 的作法）。
     """
     logger.warning("文件內容變更但分類已鎖定，標記待審查（flag_for_review）: doc_id=%s", document_id)
+    sentry_sdk.capture_message(f"flag_for_review 觸發：文件內容變更但分類已鎖定 doc_id={document_id}", level="warning")
 
 
 def on_file_reupload(
