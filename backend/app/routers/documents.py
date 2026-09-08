@@ -150,6 +150,7 @@ async def list_documents(user: UserContext = Depends(get_current_user)):
             processing_status=doc["processing_status"],
             classification_status=doc["classification_status"],
             final_categories=doc["final_categories"],
+            departments=doc["departments"],
             confidentiality=doc["confidentiality"],
             updated_at=doc["updated_at"],
         )
@@ -263,7 +264,13 @@ async def reorganize_document(payload: ReorganizeRequest, user: UserContext = De
     service_role bypass RLS，不能只靠 DB 擋跨租戶操作），跨租戶或文件不存在皆回 404。
     """
     documents_repo = DocumentsRepository()
-    doc = documents_repo.reorganize(payload.document_id, payload.manual_categories, tenant_id=user.tenant_id)
+    doc = documents_repo.reorganize(
+        payload.document_id,
+        payload.manual_categories,
+        tenant_id=user.tenant_id,
+        departments=payload.departments,
+        confidentiality=payload.confidentiality,
+    )
     if doc is None:
         raise HTTPException(status_code=404, detail="文件不存在")
 
@@ -271,6 +278,7 @@ async def reorganize_document(payload: ReorganizeRequest, user: UserContext = De
         document_id=doc["id"],
         classification_status=doc["classification_status"],
         final_categories=doc["final_categories"],
+        departments=doc["departments"],
     )
 
 

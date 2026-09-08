@@ -18,6 +18,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   AlertDialog,
   AlertDialogClose,
   AlertDialogContent,
@@ -41,11 +48,24 @@ import {
   reorganizeDocument,
   unlockDocuments,
   type ClassificationStatus,
+  type Confidentiality,
   type DocumentListItem,
   type ProcessingStatus,
 } from "@/lib/api";
 
 const EDITOR_ROLES = new Set(["admin", "editor"]);
+
+const CONFIDENTIALITY_LABEL: Record<string, string> = {
+  public: "公開",
+  internal: "內部",
+  restricted: "機密",
+};
+
+const CONFIDENTIALITY_BADGE_CLASS: Record<string, string> = {
+  public: "bg-emerald-100 text-emerald-700",
+  internal: "bg-muted text-muted-foreground",
+  restricted: "bg-red-100 text-red-700",
+};
 
 type StatusFilter = "all" | "completed" | "processing" | "failed";
 
@@ -112,11 +132,25 @@ function ClassificationBadge({ status }: { status: ClassificationStatus }) {
   );
 }
 
+function ConfidentialityBadge({ confidentiality }: { confidentiality: string }) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs ${CONFIDENTIALITY_BADGE_CLASS[confidentiality] ?? "bg-muted text-muted-foreground"}`}
+    >
+      {CONFIDENTIALITY_LABEL[confidentiality] ?? confidentiality}
+    </span>
+  );
+}
+
 function DocumentRow({ doc }: { doc: DocumentListItem }) {
   const { session, role } = useAuth();
   const accessToken = session!.access_token;
   const queryClient = useQueryClient();
   const [categoriesInput, setCategoriesInput] = useState(doc.final_categories.join(", "));
+  const [departmentsInput, setDepartmentsInput] = useState(doc.departments.join(", "));
+  const [confidentiality, setConfidentiality] = useState<Confidentiality>(
+    (doc.confidentiality as Confidentiality) ?? "internal",
+  );
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["documents"] });
 
@@ -126,7 +160,14 @@ function DocumentRow({ doc }: { doc: DocumentListItem }) {
         .split(",")
         .map((c) => c.trim())
         .filter(Boolean);
-      return reorganizeDocument(doc.document_id, categories, accessToken);
+      const departments = departmentsInput
+        .split(",")
+        .map((d) => d.trim())
+        .filter(Boolean);
+      return reorganizeDocument(doc.document_id, categories, accessToken, {
+        departments,
+        confidentiality,
+      });
     },
     onSuccess: invalidate,
   });
@@ -159,17 +200,39 @@ function DocumentRow({ doc }: { doc: DocumentListItem }) {
         </Badge>
       </td>
       <td className="p-2 align-top">
-        <ClassificationBadge status={doc.classification_status} />
+        <div className="flex flex-col items-start gap-1">
+          <ClassificationBadge status={doc.classification_status} />
+          <ConfidentialityBadge confidentiality={doc.confidentiality} />
+        </div>
       </td>
       <td className="p-2 align-top">
         {canReorganize ? (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Input
               value={categoriesInput}
               onChange={(e) => setCategoriesInput(e.target.value)}
               placeholder="分類（逗號分隔）"
-              className="h-7 w-40 text-xs"
+              className="h-7 w-36 text-xs"
             />
+            <Input
+              value={departmentsInput}
+              onChange={(e) => setDepartmentsInput(e.target.value)}
+              placeholder="部門（逗號分隔）"
+              className="h-7 w-36 text-xs"
+            />
+            <Select
+              value={confidentiality}
+              onValueChange={(value) => setConfidentiality(value as Confidentiality)}
+            >
+              <SelectTrigger size="sm" className="h-7 text-xs">
+                <SelectValue placeholder="機密等級" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="public">公開</SelectItem>
+                <SelectItem value="internal">內部</SelectItem>
+                <SelectItem value="restricted">機密</SelectItem>
+              </SelectContent>
+            </Select>
             <Button
               size="xs"
               variant="outline"

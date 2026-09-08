@@ -41,3 +41,37 @@ def test_apply_auto_classification_returns_none_when_locked():
     result = repo.apply_auto_classification("doc-1", ["財務報表"], "tenant_a")
 
     assert result is None
+
+
+def test_reorganize_includes_departments_and_confidentiality_when_provided():
+    """DoD：reorganize 帶這兩個欄位時，UPDATE payload 必須包含對應 key（見 spec §4.1）。"""
+    repo, client = _repo_with_mock_client()
+    client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock(
+        data=[{"id": "doc-1"}]
+    )
+
+    repo.reorganize(
+        "doc-1",
+        ["財務報表"],
+        tenant_id="tenant_a",
+        departments=["財務部"],
+        confidentiality="restricted",
+    )
+
+    update_payload = client.table.return_value.update.call_args.args[0]
+    assert update_payload["departments"] == ["財務部"]
+    assert update_payload["confidentiality"] == "restricted"
+
+
+def test_reorganize_omits_departments_and_confidentiality_when_not_provided():
+    """DoD 關鍵斷言：不帶這兩個欄位時 payload 不可包含對應 key，避免覆寫成空值/預設值。"""
+    repo, client = _repo_with_mock_client()
+    client.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock(
+        data=[{"id": "doc-1"}]
+    )
+
+    repo.reorganize("doc-1", ["財務報表"], tenant_id="tenant_a")
+
+    update_payload = client.table.return_value.update.call_args.args[0]
+    assert "departments" not in update_payload
+    assert "confidentiality" not in update_payload

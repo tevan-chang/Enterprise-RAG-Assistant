@@ -15,12 +15,15 @@ export type DocumentStatusResponse = {
   updated_at: string;
 };
 
+export type Confidentiality = "public" | "internal" | "restricted";
+
 export type DocumentListItem = {
   document_id: string;
   file_name: string;
   processing_status: ProcessingStatus;
   classification_status: ClassificationStatus;
   final_categories: string[];
+  departments: string[];
   confidentiality: string;
   updated_at: string;
 };
@@ -152,11 +155,17 @@ export function reorganizeDocument(
   documentId: string,
   manualCategories: string[],
   accessToken: string,
+  options?: { departments?: string[]; confidentiality?: Confidentiality },
 ): Promise<void> {
   return request("/api/documents/reorganize", accessToken, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ document_id: documentId, manual_categories: manualCategories }),
+    body: JSON.stringify({
+      document_id: documentId,
+      manual_categories: manualCategories,
+      ...(options?.departments !== undefined ? { departments: options.departments } : {}),
+      ...(options?.confidentiality !== undefined ? { confidentiality: options.confidentiality } : {}),
+    }),
   });
 }
 
