@@ -25,6 +25,13 @@ class ChunksRepository:
         ]
         self._client.table("document_chunks").insert(rows).execute()
 
+    def delete_by_document(self, document_id: str) -> None:
+        """reupload 前清除舊 chunks 用（見 routers/documents.py 的 reupload 端點）：
+        文件內容被替換時 document row 本身不會被刪除，既有 FK 的 `on delete cascade`
+        不會觸發，必須在寫入新 chunk 前手動清掉舊資料，避免新舊內容並存造成 RAG 回答混雜。
+        """
+        self._client.table("document_chunks").delete().eq("document_id", document_id).execute()
+
     def list_by_document(self, document_id: str) -> list[dict]:
         resp = (
             self._client.table("document_chunks")

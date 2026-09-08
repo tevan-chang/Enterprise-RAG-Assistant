@@ -1,9 +1,11 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { Session, User } from "@supabase/supabase-js";
 
 import { createClient } from "@/lib/supabase/client";
+import { resetUnauthorizedTrigger, setUnauthorizedHandler } from "@/lib/api";
 
 type Auth = {
   session: Session | null;
@@ -22,6 +24,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const supabase = createClient();
+  const router = useRouter();
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -42,6 +45,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = async () => {
     await supabase.auth.signOut();
   };
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      signOut().finally(() => {
+        router.push("/login");
+        resetUnauthorizedTrigger();
+      });
+    });
+    return () => setUnauthorizedHandler(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router]);
 
   const user = session?.user ?? null;
   const appMetadata = (user?.app_metadata ?? {}) as { tenant_id?: string; role?: string };

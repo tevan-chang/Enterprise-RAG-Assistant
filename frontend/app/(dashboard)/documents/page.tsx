@@ -8,6 +8,7 @@ import {
   FileStack,
   FileText,
   Loader2,
+  Trash2,
   Wand2,
   Lock,
   XCircle,
@@ -16,6 +17,16 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { StatCard } from "@/components/stat-card";
 import { useAuth } from "@/lib/auth-context";
 import { useUploadModal } from "@/lib/upload-modal-context";
@@ -25,6 +36,7 @@ import {
   deriveDocumentStats,
 } from "@/lib/document-status";
 import {
+  deleteDocument,
   listDocuments,
   reorganizeDocument,
   unlockDocuments,
@@ -124,8 +136,14 @@ function DocumentRow({ doc }: { doc: DocumentListItem }) {
     onSuccess: invalidate,
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteDocument(doc.document_id, accessToken),
+    onSuccess: invalidate,
+  });
+
   const canReorganize = EDITOR_ROLES.has(role ?? "");
   const canUnlock = role === "admin" && doc.classification_status === "manually_verified";
+  const canDelete = EDITOR_ROLES.has(role ?? "");
 
   return (
     <tr className="border-b">
@@ -166,16 +184,54 @@ function DocumentRow({ doc }: { doc: DocumentListItem }) {
         )}
       </td>
       <td className="p-2 align-top">
-        {canUnlock && (
-          <Button
-            size="xs"
-            variant="ghost"
-            onClick={() => unlockMutation.mutate()}
-            disabled={unlockMutation.isPending}
-          >
-            解鎖
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {canUnlock && (
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => unlockMutation.mutate()}
+              disabled={unlockMutation.isPending}
+            >
+              解鎖
+            </Button>
+          )}
+          {canDelete && (
+            <AlertDialog>
+              <AlertDialogTrigger
+                render={
+                  <Button size="icon-xs" variant="ghost" disabled={deleteMutation.isPending}>
+                    <Trash2 className="text-destructive" />
+                    <span className="sr-only">刪除</span>
+                  </Button>
+                }
+              />
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>確定要刪除《{doc.file_name}》嗎？</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    此操作無法復原，將一併清除已解析的內容與向量資料。
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogClose render={<Button variant="outline" size="xs" />}>
+                    取消
+                  </AlertDialogClose>
+                  <AlertDialogClose
+                    render={
+                      <Button
+                        variant="destructive"
+                        size="xs"
+                        onClick={() => deleteMutation.mutate()}
+                      />
+                    }
+                  >
+                    確定刪除
+                  </AlertDialogClose>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+        </div>
       </td>
     </tr>
   );

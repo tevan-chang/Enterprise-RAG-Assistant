@@ -58,13 +58,41 @@ export type ReportGenerateResponse = {
   tool_calls: ReportToolCall[];
 };
 
-class ApiError extends Error {
+export class ApiError extends Error {
+  /** 後端結構化錯誤（例如 409 detail 為 dict）時，解析後的 JSON 內容；純文字錯誤則為 undefined。 */
+  public body: unknown;
+
   constructor(
     public status: number,
     message: string,
   ) {
     super(message);
+    try {
+      this.body = JSON.parse(message);
+    } catch {
+      this.body = undefined;
+    }
   }
+}
+
+/** 401 全域登出機制：`api.ts` 不能直接 import React context，改由 `AuthProvider`
+ * 註冊這個模組層級 handler；`unauthorizedTriggered` 避免同時炸開的多個 401 重複導頁。 */
+type UnauthorizedHandler = () => void;
+let unauthorizedHandler: UnauthorizedHandler | null = null;
+let unauthorizedTriggered = false;
+
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null) {
+  unauthorizedHandler = handler;
+}
+
+export function resetUnauthorizedTrigger() {
+  unauthorizedTriggered = false;
+}
+
+function notifyUnauthorized() {
+  if (unauthorizedTriggered) return;
+  unauthorizedTriggered = true;
+  unauthorizedHandler?.();
 }
 
 async function request<T>(path: string, accessToken: string, init?: RequestInit): Promise<T> {
@@ -77,16 +105,36 @@ async function request<T>(path: string, accessToken: string, init?: RequestInit)
   });
 
   if (!res.ok) {
+    if (res.status === 401) notifyUnauthorized();
     const detail = await res.text();
     throw new ApiError(res.status, detail || res.statusText);
   }
   return res.json() as Promise<T>;
 }
 
-export function uploadDocument(file: File, accessToken: string): Promise<DocumentUploadResponse> {
+export function uploadDocument(
+  file: File,
+  accessToken: string,
+  options?: { force?: boolean },
+): Promise<DocumentUploadResponse> {
   const formData = new FormData();
   formData.append("file", file);
-  return request<DocumentUploadResponse>("/api/documents/upload", accessToken, {
+  const query = options?.force ? "?force=true" : "";
+  return request<DocumentUploadResponse>(`/api/documents/upload${query}`, accessToken, {
+    method: "POST",
+    body: formData,
+  });
+}
+
+/** 使用者在上傳的 409 filename_exists 衝突提示中選擇「覆蓋既有文件」時呼叫（見 upload-document-modal.tsx）。 */
+export function reuploadDocument(
+  documentId: string,
+  file: File,
+  accessToken: string,
+): Promise<DocumentUploadResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return request<DocumentUploadResponse>(`/api/documents/${documentId}/reupload`, accessToken, {
     method: "POST",
     body: formData,
   });
@@ -131,6 +179,10 @@ export function getCitationDetail(
   );
 }
 
+export function deleteDocument(documentId: string, accessToken: string): Promise<void> {
+  return request<void>(`/api/documents/${documentId}`, accessToken, { method: "DELETE" });
+}
+
 export function unlockDocuments(documentIds: string[], accessToken: string): Promise<void> {
   return request("/api/documents/unlock", accessToken, {
     method: "POST",
@@ -171,6 +223,7 @@ export async function streamChatQuery(
   });
 
   if (!res.ok || !res.body) {
+    if (res.status === 401) notifyUnauthorized();
     const detail = await res.text().catch(() => "");
     throw new ApiError(res.status, detail || res.statusText);
   }

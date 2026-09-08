@@ -257,7 +257,8 @@ async def on_file_reupload(doc_id: str, new_content: bytes):
 
 | Method / Path | 說明 |
 | :---- | :---- |
-| POST /api/documents/upload | PDF/XLSX 上傳與解析（含 fallback 邏輯） |
+| POST /api/documents/upload | PDF/XLSX 上傳與解析（含 fallback 邏輯）；上傳前依 `file_content_hash` 比對同租戶內是否已有相同內容的文件，命中回 409（不比檔名）；內容不同但檔名相同時也回 409（`reason: filename_exists`），可帶 `force=true` 略過 |
+| POST /api/documents/{doc_id}/reupload | 使用者選擇「覆蓋既有文件」時呼叫：更新 file_content_hash、清除舊 chunks、重新跑一次解析 pipeline；hash 有變且原本 manually_verified 時觸發 flag_for_review（見 §4.3），不自動解鎖 |
 | POST /api/documents/reorganize | 手動改名/編輯標籤，狀態鎖升級為 2 |
 | POST /api/documents/unlock | 批次解鎖，狀態鎖降級為 1 |
 | DELETE /api/documents/{doc_id} | 刪除檔案並觸發向量 Cascade 清理 |

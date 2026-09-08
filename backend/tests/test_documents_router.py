@@ -1,3 +1,4 @@
+import hashlib
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -50,6 +51,8 @@ def test_upload_as_viewer_returns_403():
 def test_upload_as_editor_or_admin_succeeds():
     for role in ("editor", "admin"):
         repo = MagicMock()
+        repo.get_by_content_hash.return_value = None
+        repo.get_by_file_name.return_value = None
         repo.create.return_value = {"id": "doc-1", "processing_status": "parsing"}
         _as_user(role=role, tenant_id="tenant_a")
 
@@ -91,6 +94,8 @@ def test_upload_rejects_unsupported_content_type_returns_422():
 
 def test_upload_pdf_triggers_background_task_with_correct_pipeline():
     repo = MagicMock()
+    repo.get_by_content_hash.return_value = None
+    repo.get_by_file_name.return_value = None
     repo.create.return_value = {"id": "doc-1", "processing_status": "parsing"}
     _as_user(role="editor", tenant_id="tenant_a")
 
@@ -117,6 +122,8 @@ def test_upload_pdf_triggers_background_task_with_correct_pipeline():
 
 def test_upload_xlsx_triggers_background_task_with_correct_pipeline():
     repo = MagicMock()
+    repo.get_by_content_hash.return_value = None
+    repo.get_by_file_name.return_value = None
     repo.create.return_value = {"id": "doc-2", "processing_status": "parsing"}
     _as_user(role="admin", tenant_id="tenant_a")
 
@@ -148,6 +155,255 @@ def test_upload_without_authorization_header_returns_422():
     )
 
     assert resp.status_code == 422
+
+
+def test_upload_duplicate_content_hash_returns_409():
+    """同一份檔案（內容 hash 相同）第二次上傳直接擋下，不建立新文件、不觸發 pipeline。"""
+    repo = MagicMock()
+    repo.get_by_content_hash.return_value = {"id": "doc-existing", "file_name": "a.pdf"}
+    _as_user(role="editor", tenant_id="tenant_a")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository", return_value=repo),
+        patch.object(BackgroundTasks, "add_task") as mock_add_task,
+    ):
+        resp = client.post(
+            "/api/documents/upload",
+            files={"file": ("a.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {
+        "message": "相同內容的文件已存在，略過重複上傳",
+        "document_id": "doc-existing",
+        "file_name": "a.pdf",
+    }
+    repo.create.assert_not_called()
+    mock_add_task.assert_not_called()
+
+
+def test_upload_duplicate_content_different_filename_still_returns_409():
+    """證明比對邏輯是 file_content_hash 而非檔名：檔名不同、內容相同一樣被擋。"""
+    repo = MagicMock()
+    repo.get_by_content_hash.return_value = {"id": "doc-existing", "file_name": "original.pdf"}
+    _as_user(role="editor", tenant_id="tenant_a")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository", return_value=repo),
+        patch.object(BackgroundTasks, "add_task") as mock_add_task,
+    ):
+        resp = client.post(
+            "/api/documents/upload",
+            files={"file": ("renamed.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["document_id"] == "doc-existing"
+    repo.create.assert_not_called()
+    mock_add_task.assert_not_called()
+
+
+def test_upload_filename_collision_returns_409():
+    """檔名相同、內容 hash 不同：無法自動判斷是版本更新還是同名的不同文件，
+    交由使用者選擇，不自動建立新文件（見 spec §4.3 延伸）。"""
+    repo = MagicMock()
+    repo.get_by_content_hash.return_value = None
+    repo.get_by_file_name.return_value = {
+        "id": "doc-existing",
+        "file_name": "a.pdf",
+        "classification_status": "manually_verified",
+    }
+    _as_user(role="editor", tenant_id="tenant_a")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository", return_value=repo),
+        patch.object(BackgroundTasks, "add_task") as mock_add_task,
+    ):
+        resp = client.post(
+            "/api/documents/upload",
+            files={"file": ("a.pdf", b"different content", "application/pdf")},
+        )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {
+        "reason": "filename_exists",
+        "message": "已有相同檔名的文件，請選擇覆蓋既有文件或改用其他檔名",
+        "document_id": "doc-existing",
+        "file_name": "a.pdf",
+        "classification_status": "manually_verified",
+    }
+    repo.create.assert_not_called()
+    mock_add_task.assert_not_called()
+
+
+def test_upload_with_force_skips_filename_collision_check():
+    """使用者在前端選擇「仍要新建」時帶 force=true，略過檔名碰撞檢查，正常建立新文件。"""
+    repo = MagicMock()
+    repo.get_by_content_hash.return_value = None
+    repo.create.return_value = {"id": "doc-new", "processing_status": "parsing"}
+    _as_user(role="editor", tenant_id="tenant_a")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository", return_value=repo),
+        patch.object(BackgroundTasks, "add_task") as mock_add_task,
+    ):
+        resp = client.post(
+            "/api/documents/upload",
+            params={"force": "true"},
+            files={"file": ("a.pdf", b"different content", "application/pdf")},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"document_id": "doc-new", "processing_status": "parsing"}
+    repo.get_by_file_name.assert_not_called()
+    mock_add_task.assert_called_once()
+
+
+def test_reupload_as_editor_or_admin_succeeds():
+    for role in ("editor", "admin"):
+        repo = MagicMock()
+        repo.get.return_value = {
+            "id": "doc-1",
+            "tenant_id": "tenant_a",
+            "file_name": "a.pdf",
+            "file_content_hash": "old-hash",
+            "classification_status": "auto_labeled",
+        }
+        _as_user(role=role, tenant_id="tenant_a")
+
+        with (
+            patch(f"{_MODULE}.DocumentsRepository", return_value=repo),
+            patch(f"{_MODULE}.ChunksRepository") as MockChunksRepo,
+            patch(f"{_MODULE}.on_file_reupload") as mock_on_reupload,
+            patch.object(BackgroundTasks, "add_task") as mock_add_task,
+        ):
+            resp = client.post(
+                "/api/documents/doc-1/reupload",
+                files={"file": ("a.pdf", b"new content", "application/pdf")},
+            )
+
+        assert resp.status_code == 200, f"role={role} 應允許 reupload"
+        assert resp.json() == {"document_id": "doc-1", "processing_status": "parsing"}
+        mock_on_reupload.assert_called_once_with("doc-1", b"new content", documents_repo=repo)
+        repo.update_for_reupload.assert_called_once()
+        args, kwargs = repo.update_for_reupload.call_args
+        assert args[0] == "doc-1"
+        assert args[2] == "parsing"
+        MockChunksRepo.return_value.delete_by_document.assert_called_once_with("doc-1")
+        mock_add_task.assert_called_once()
+        add_task_args, add_task_kwargs = mock_add_task.call_args
+        assert add_task_args[0] is documents.process_pdf_document
+        assert add_task_kwargs == {
+            "document_id": "doc-1",
+            "tenant_id": "tenant_a",
+            "file_bytes": b"new content",
+            "file_name": "a.pdf",
+        }
+
+
+def test_reupload_as_viewer_returns_403():
+    _as_user(role="viewer")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository") as MockRepo,
+        patch(f"{_MODULE}.ChunksRepository") as MockChunksRepo,
+        patch.object(BackgroundTasks, "add_task") as mock_add_task,
+    ):
+        resp = client.post(
+            "/api/documents/doc-1/reupload",
+            files={"file": ("a.pdf", b"new content", "application/pdf")},
+        )
+
+    assert resp.status_code == 403
+    MockRepo.return_value.update_for_reupload.assert_not_called()
+    MockChunksRepo.return_value.delete_by_document.assert_not_called()
+    mock_add_task.assert_not_called()
+
+
+def test_reupload_missing_document_returns_404():
+    repo = MagicMock()
+    repo.get.return_value = None
+    _as_user(role="editor", tenant_id="tenant_a")
+
+    with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
+        resp = client.post(
+            "/api/documents/missing/reupload",
+            files={"file": ("a.pdf", b"new content", "application/pdf")},
+        )
+
+    assert resp.status_code == 404
+
+
+def test_reupload_cross_tenant_returns_404():
+    repo = MagicMock()
+    repo.get.return_value = {
+        "id": "doc-1",
+        "tenant_id": "tenant_b",
+        "file_name": "a.pdf",
+        "file_content_hash": "old-hash",
+        "classification_status": "auto_labeled",
+    }
+    _as_user(role="editor", tenant_id="tenant_a")
+
+    with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
+        resp = client.post(
+            "/api/documents/doc-1/reupload",
+            files={"file": ("a.pdf", b"new content", "application/pdf")},
+        )
+
+    assert resp.status_code == 404
+
+
+def test_reupload_flags_for_review_when_locked_and_hash_changed():
+    """spec §4.3：hash 有變且原本已鎖定時觸發 flag_for_review，不自動解鎖
+    （classification_status 不應被 reupload 端點動到）。"""
+    repo = MagicMock()
+    repo.get.return_value = {
+        "id": "doc-1",
+        "tenant_id": "tenant_a",
+        "file_name": "a.pdf",
+        "file_content_hash": hashlib.sha256(b"old content").hexdigest(),
+        "classification_status": "manually_verified",
+    }
+    _as_user(role="editor", tenant_id="tenant_a")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository", return_value=repo),
+        patch(f"{_MODULE}.ChunksRepository"),
+        patch("app.services.classification.flag_for_review") as mock_flag,
+        patch.object(BackgroundTasks, "add_task"),
+    ):
+        resp = client.post(
+            "/api/documents/doc-1/reupload",
+            files={"file": ("a.pdf", b"new content", "application/pdf")},
+        )
+
+    assert resp.status_code == 200
+    mock_flag.assert_called_once_with("doc-1")
+    repo.reorganize.assert_not_called()
+
+
+def test_reupload_rejects_unsupported_content_type_returns_422():
+    _as_user(role="editor", tenant_id="tenant_a")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository") as MockRepo,
+        patch.object(BackgroundTasks, "add_task") as mock_add_task,
+    ):
+        resp = client.post(
+            "/api/documents/doc-1/reupload",
+            files={
+                "file": (
+                    "a.docx",
+                    b"fake docx bytes",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+        )
+
+    assert resp.status_code == 422
+    MockRepo.return_value.get.assert_not_called()
+    mock_add_task.assert_not_called()
 
 
 def test_delete_document_as_viewer_returns_403():

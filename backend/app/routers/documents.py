@@ -18,6 +18,7 @@ from app.schemas.documents import (
     UnlockRequest,
     UnlockResponse,
 )
+from app.services.classification import on_file_reupload
 from app.services.document_pipeline import process_pdf_document, process_xlsx_document
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -41,6 +42,7 @@ _ADMIN_ROLES = {"admin"}
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile,
+    force: bool = False,
     user: UserContext = Depends(get_current_user),
 ):
     pipeline = _PIPELINE_BY_CONTENT_TYPE.get(file.content_type)
@@ -50,6 +52,32 @@ async def upload_document(
     file_bytes = await file.read()
     file_content_hash = hashlib.sha256(file_bytes).hexdigest()
     documents_repo = DocumentsRepository()
+
+    existing = documents_repo.get_by_content_hash(file_content_hash, tenant_id=user.tenant_id)
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "相同內容的文件已存在，略過重複上傳",
+                "document_id": existing["id"],
+                "file_name": existing["file_name"],
+            },
+        )
+
+    if not force:
+        existing_by_name = documents_repo.get_by_file_name(file.filename, tenant_id=user.tenant_id)
+        if existing_by_name is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "reason": "filename_exists",
+                    "message": "已有相同檔名的文件，請選擇覆蓋既有文件或改用其他檔名",
+                    "document_id": existing_by_name["id"],
+                    "file_name": existing_by_name["file_name"],
+                    "classification_status": existing_by_name["classification_status"],
+                },
+            )
+
     doc = documents_repo.create(
         tenant_id=user.tenant_id, file_name=file.filename, file_content_hash=file_content_hash
     )
@@ -63,6 +91,51 @@ async def upload_document(
     )
 
     return DocumentUploadResponse(document_id=doc["id"], processing_status=doc["processing_status"])
+
+
+@router.post(
+    "/{document_id}/reupload",
+    response_model=DocumentUploadResponse,
+    dependencies=[Depends(require_role(_EDITOR_ROLES))],
+)
+async def reupload_document(
+    document_id: str,
+    background_tasks: BackgroundTasks,
+    file: UploadFile,
+    user: UserContext = Depends(get_current_user),
+):
+    """使用者在前端明確選擇「覆蓋既有文件」時呼叫（見 upload 端點的 409 filename_exists）。
+
+    見 spec §4.3：hash 有變且原狀態為 manually_verified 時觸發 flag_for_review，
+    不自動解鎖；清除舊 chunks 一律先於寫入新 chunk（見 ChunksRepository.delete_by_document）。
+    """
+    pipeline = _PIPELINE_BY_CONTENT_TYPE.get(file.content_type)
+    if pipeline is None:
+        raise HTTPException(status_code=422, detail="僅支援 PDF 或 XLSX 上傳")
+
+    documents_repo = DocumentsRepository()
+    doc = documents_repo.get(document_id)
+    if doc is None or doc["tenant_id"] != user.tenant_id:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    file_bytes = await file.read()
+    on_file_reupload(document_id, file_bytes, documents_repo=documents_repo)
+
+    new_hash = hashlib.sha256(file_bytes).hexdigest()
+    documents_repo.update_for_reupload(document_id, new_hash, "parsing")
+
+    chunks_repo = ChunksRepository()
+    chunks_repo.delete_by_document(document_id)
+
+    background_tasks.add_task(
+        pipeline,
+        document_id=document_id,
+        tenant_id=user.tenant_id,
+        file_bytes=file_bytes,
+        file_name=doc["file_name"],
+    )
+
+    return DocumentUploadResponse(document_id=document_id, processing_status="parsing")
 
 
 @router.get("", response_model=list[DocumentListItem])

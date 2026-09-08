@@ -20,6 +20,48 @@ class DocumentsRepository:
         resp = self._client.table("documents").select("*").eq("id", document_id).limit(1).execute()
         return resp.data[0] if resp.data else None
 
+    def get_by_content_hash(self, file_content_hash: str, tenant_id: str) -> dict | None:
+        """上傳前查重複用（見 upload_document）：同租戶內內容 hash 完全相同即視為重複，
+        不比檔名。`tenant_id` 帶進 WHERE 條件的理由同 `delete()`/`reorganize()`。
+        """
+        resp = (
+            self._client.table("documents")
+            .select("*")
+            .eq("tenant_id", tenant_id)
+            .eq("file_content_hash", file_content_hash)
+            .limit(1)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def get_by_file_name(self, file_name: str, tenant_id: str) -> dict | None:
+        """上傳前查檔名碰撞用（見 upload_document）：檔名相同、內容 hash 不同時，
+        不能自動判斷是版本更新還是同名的不同文件，交由使用者在前端選擇。
+        """
+        resp = (
+            self._client.table("documents")
+            .select("*")
+            .eq("tenant_id", tenant_id)
+            .eq("file_name", file_name)
+            .limit(1)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def update_for_reupload(self, document_id: str, file_content_hash: str, processing_status: str) -> None:
+        """使用者明確選擇「覆蓋既有文件」時呼叫（見 reupload_document 端點）：更新
+        file_content_hash 並重置 processing_status，讓 pipeline 重新跑一次。刻意不動
+        classification_status——內容變更是否需要 flag_for_review 由呼叫端另外呼叫
+        `services/classification.on_file_reupload` 判斷（見 spec §4.3），這裡不重複邏輯。
+        """
+        self._client.table("documents").update(
+            {
+                "file_content_hash": file_content_hash,
+                "processing_status": processing_status,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("id", document_id).execute()
+
     def list_by_tenant(self, tenant_id: str) -> list[dict]:
         resp = (
             self._client.table("documents")
