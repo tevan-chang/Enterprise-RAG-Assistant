@@ -19,6 +19,7 @@ async def query(
             query=payload.query,
             tenant_id=user.tenant_id,
             role=user.role,
+            user_id=user.user_id,
             departments=payload.departments,
             top_k=payload.top_k,
         ),

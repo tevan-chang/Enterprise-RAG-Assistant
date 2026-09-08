@@ -1,11 +1,75 @@
 import hashlib
+import json
 import logging
+from functools import lru_cache
 
 import sentry_sdk
+from openai import AsyncOpenAI
 
+from app.config import settings
 from app.repositories.documents_repository import DocumentsRepository
+from app.services.token_usage import record_usage
 
 logger = logging.getLogger(__name__)
+
+_CLASSIFY_SYSTEM_PROMPT = (
+    "你是企業文件分類助理。根據提供的檔名與文件內容片段，判斷這份文件屬於哪些業務分類"
+    "（例如：財務報表、人資政策、法務合約、行銷企劃、技術文件等），輸出 1 到 3 個最相關的中文分類標籤。"
+    "只輸出 JSON array（例如 [\"財務報表\", \"季度報告\"]），不要 markdown code fence，不要任何前後說明文字。"
+)
+
+
+@lru_cache
+def _get_client() -> AsyncOpenAI:
+    return AsyncOpenAI(api_key=settings.openai_api_key)
+
+
+async def auto_classify(
+    document_id: str,
+    tenant_id: str,
+    user_id: str,
+    file_name: str,
+    chunk_texts: list[str],
+    documents_repo: DocumentsRepository | None = None,
+) -> None:
+    """文件解析/embedding 成功完成後觸發（見 services/document_pipeline._embed_and_store_chunks
+    尾段），把 classification_status 從 pending_auto 推進為 auto_labeled（見 spec §4.2）。
+
+    只餵檔名 + 前 1~2 個 chunk 給 LLM（不是全文），比照 Day 8 Schema-First 的 Token 節制精神。
+    分類失敗（LLM 呼叫或 JSON 解析失敗）不可讓文件變成 failed——解析與 embedding 都已成功，
+    文件本身可用，這裡一律 log + sentry_sdk.capture_exception，classification_status 留在
+    pending_auto（比照 zombie_cleanup.py / flag_for_review 既有的手動 capture 慣例）。
+    """
+    repo = documents_repo or DocumentsRepository()
+    content_preview = "\n\n".join(chunk_texts[:2])
+    user_prompt = f"檔名：{file_name}\n\n內容片段：\n{content_preview}"
+
+    try:
+        response = await _get_client().chat.completions.create(
+            model=settings.chat_model,
+            messages=[
+                {"role": "system", "content": _CLASSIFY_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        raw = response.choices[0].message.content or "[]"
+        categories = json.loads(raw)
+        if not isinstance(categories, list) or not all(isinstance(item, str) for item in categories):
+            raise ValueError(f"分類結果非字串陣列: {raw!r}")
+    except Exception as exc:
+        logger.error("自動分類失敗: doc=%s err=%s", document_id, exc)
+        sentry_sdk.capture_exception(exc)
+        return
+
+    record_usage(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        feature="classification",
+        model=settings.chat_model,
+        prompt_tokens=response.usage.prompt_tokens,
+        completion_tokens=response.usage.completion_tokens,
+    )
+    repo.apply_auto_classification(document_id, categories, tenant_id)
 
 
 def flag_for_review(document_id: str) -> None:

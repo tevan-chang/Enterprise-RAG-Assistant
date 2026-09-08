@@ -7,6 +7,7 @@ from openai import APIConnectionError, APIError, AsyncOpenAI
 
 from app.adapters.retrievers import DenseRetriever
 from app.config import settings
+from app.services.token_usage import record_usage
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ async def stream_chat_response(
     query: str,
     tenant_id: str,
     role: str,
+    user_id: str,
     departments: list[str] | None = None,
     top_k: int | None = None,
 ) -> AsyncGenerator[str, None]:
@@ -104,13 +106,21 @@ async def stream_chat_response(
     if chunks:
         yield _sse_event("citations", {"citations": _build_citations(chunks)})
 
+    usage = None
     try:
         stream = await _get_client().chat.completions.create(
             model=settings.chat_model,
             messages=_build_messages(query, chunks),
             stream=True,
+            stream_options={"include_usage": True},
         )
         async for chunk in stream:
+            if chunk.usage is not None:
+                usage = chunk.usage
+            if not chunk.choices:
+                # stream_options.include_usage 會在 [DONE] 前多送一個 choices 為空陣列、
+                # 只帶 usage 的 chunk（見 OpenAI Python SDK ChatCompletionChunk 定義）。
+                continue
             delta = chunk.choices[0].delta.content
             if delta:
                 yield _sse_event("message", {"delta": delta})
@@ -118,5 +128,15 @@ async def stream_chat_response(
         logger.exception("Chat 串流中斷")
         yield _sse_event("error", {"message": f"AI 回應中斷：{exc}"})
         return
+
+    if usage is not None:
+        record_usage(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            feature="chat",
+            model=settings.chat_model,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+        )
 
     yield _sse_event("done", {})

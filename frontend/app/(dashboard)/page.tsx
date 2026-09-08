@@ -2,7 +2,16 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { CheckCircle2, FileStack, Loader2, MessageSquare, FileText, Upload, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  Coins,
+  FileStack,
+  Loader2,
+  MessageSquare,
+  FileText,
+  Upload,
+  XCircle,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +19,7 @@ import { StatCard } from "@/components/stat-card";
 import { useAuth } from "@/lib/auth-context";
 import { useUploadModal } from "@/lib/upload-modal-context";
 import { PROCESSING_STATUS_LABEL, STATUS_BADGE_CLASS, deriveDocumentStats } from "@/lib/document-status";
-import { listDocuments } from "@/lib/api";
+import { getUsage, listDocuments } from "@/lib/api";
 
 const QUICK_LINKS = [
   {
@@ -34,6 +43,12 @@ export default function Home() {
   const documentsQuery = useQuery({
     queryKey: ["documents", session?.user.id],
     queryFn: () => listDocuments(session!.access_token),
+    enabled: !!session,
+  });
+
+  const usageQuery = useQuery({
+    queryKey: ["usage", session?.user.id],
+    queryFn: () => getUsage(session!.access_token),
     enabled: !!session,
   });
 
@@ -72,6 +87,20 @@ export default function Home() {
           loading={documentsQuery.isLoading}
         />
         <StatCard label="失敗" value={stats.failed} icon={XCircle} tone="red" loading={documentsQuery.isLoading} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <StatCard
+          label="累計 Token 用量"
+          value={
+            usageQuery.data
+              ? `${usageQuery.data.total_tokens.toLocaleString()} · $${usageQuery.data.estimated_cost_usd.toFixed(4)}`
+              : "—"
+          }
+          icon={Coins}
+          tone="primary"
+          loading={usageQuery.isLoading}
+        />
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">

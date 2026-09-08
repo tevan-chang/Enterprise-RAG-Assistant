@@ -15,12 +15,15 @@ export type DocumentStatusResponse = {
   updated_at: string;
 };
 
+export type Confidentiality = "public" | "internal" | "restricted";
+
 export type DocumentListItem = {
   document_id: string;
   file_name: string;
   processing_status: ProcessingStatus;
   classification_status: ClassificationStatus;
   final_categories: string[];
+  departments: string[];
   confidentiality: string;
   updated_at: string;
 };
@@ -56,6 +59,14 @@ export type ReportToolCall = {
 export type ReportGenerateResponse = {
   content: string;
   tool_calls: ReportToolCall[];
+};
+
+/** 本租戶累計 token 用量與估算 cost（見 backend/app/routers/usage.py，Demo 版計費）。 */
+export type UsageResponse = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
 };
 
 export class ApiError extends Error {
@@ -152,11 +163,17 @@ export function reorganizeDocument(
   documentId: string,
   manualCategories: string[],
   accessToken: string,
+  options?: { departments?: string[]; confidentiality?: Confidentiality },
 ): Promise<void> {
   return request("/api/documents/reorganize", accessToken, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ document_id: documentId, manual_categories: manualCategories }),
+    body: JSON.stringify({
+      document_id: documentId,
+      manual_categories: manualCategories,
+      ...(options?.departments !== undefined ? { departments: options.departments } : {}),
+      ...(options?.confidentiality !== undefined ? { confidentiality: options.confidentiality } : {}),
+    }),
   });
 }
 
@@ -200,6 +217,10 @@ export function generateReport(query: string, accessToken: string): Promise<Repo
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query }),
   });
+}
+
+export function getUsage(accessToken: string): Promise<UsageResponse> {
+  return request<UsageResponse>("/api/usage", accessToken);
 }
 
 /**

@@ -115,6 +115,7 @@ def test_upload_pdf_triggers_background_task_with_correct_pipeline():
     assert kwargs == {
         "document_id": "doc-1",
         "tenant_id": "tenant_a",
+        "user_id": "user-1",
         "file_bytes": b"%PDF-1.4 fake",
         "file_name": "a.pdf",
     }
@@ -143,6 +144,7 @@ def test_upload_xlsx_triggers_background_task_with_correct_pipeline():
     assert kwargs == {
         "document_id": "doc-2",
         "tenant_id": "tenant_a",
+        "user_id": "user-1",
         "file_bytes": b"fake xlsx bytes",
         "file_name": "b.xlsx",
     }
@@ -296,6 +298,7 @@ def test_reupload_as_editor_or_admin_succeeds():
         assert add_task_kwargs == {
             "document_id": "doc-1",
             "tenant_id": "tenant_a",
+            "user_id": "user-1",
             "file_bytes": b"new content",
             "file_name": "a.pdf",
         }
@@ -472,6 +475,7 @@ def test_list_documents_scoped_by_tenant():
             "processing_status": "completed",
             "classification_status": "auto_labeled",
             "final_categories": ["財務"],
+            "departments": ["財務部"],
             "confidentiality": "internal",
             "updated_at": "2026-09-04T00:00:00+00:00",
         }
@@ -489,6 +493,7 @@ def test_list_documents_scoped_by_tenant():
             "processing_status": "completed",
             "classification_status": "auto_labeled",
             "final_categories": ["財務"],
+            "departments": ["財務部"],
             "confidentiality": "internal",
             "updated_at": "2026-09-04T00:00:00+00:00",
         }
@@ -508,6 +513,7 @@ def test_reorganize_as_editor_upgrades_to_manually_verified():
         "id": "doc-1",
         "classification_status": "manually_verified",
         "final_categories": ["2026核心資料"],
+        "departments": [],
     }
     _as_user(role="editor")
 
@@ -519,7 +525,41 @@ def test_reorganize_as_editor_upgrades_to_manually_verified():
 
     assert resp.status_code == 200
     assert resp.json()["classification_status"] == "manually_verified"
-    repo.reorganize.assert_called_once_with("doc-1", ["2026核心資料"], tenant_id="tenant_a")
+    repo.reorganize.assert_called_once_with(
+        "doc-1", ["2026核心資料"], tenant_id="tenant_a", departments=None, confidentiality=None
+    )
+
+
+def test_reorganize_passes_departments_and_confidentiality_when_provided():
+    repo = MagicMock()
+    repo.reorganize.return_value = {
+        "id": "doc-1",
+        "classification_status": "manually_verified",
+        "final_categories": ["財務報表"],
+        "departments": ["財務部"],
+    }
+    _as_user(role="admin")
+
+    with patch(f"{_MODULE}.DocumentsRepository", return_value=repo):
+        resp = client.post(
+            "/api/documents/reorganize",
+            json={
+                "document_id": "doc-1",
+                "manual_categories": ["財務報表"],
+                "departments": ["財務部"],
+                "confidentiality": "restricted",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["departments"] == ["財務部"]
+    repo.reorganize.assert_called_once_with(
+        "doc-1",
+        ["財務報表"],
+        tenant_id="tenant_a",
+        departments=["財務部"],
+        confidentiality="restricted",
+    )
 
 
 def test_reorganize_as_viewer_returns_403():
@@ -532,6 +572,23 @@ def test_reorganize_as_viewer_returns_403():
         )
 
     assert resp.status_code == 403
+    MockRepo.return_value.reorganize.assert_not_called()
+
+
+def test_reorganize_rejects_invalid_confidentiality_value():
+    _as_user(role="editor")
+
+    with patch(f"{_MODULE}.DocumentsRepository") as MockRepo:
+        resp = client.post(
+            "/api/documents/reorganize",
+            json={
+                "document_id": "doc-1",
+                "manual_categories": ["財務"],
+                "confidentiality": "top-secret",
+            },
+        )
+
+    assert resp.status_code == 422
     MockRepo.return_value.reorganize.assert_not_called()
 
 
@@ -564,7 +621,9 @@ def test_reorganize_cross_tenant_returns_404():
         )
 
     assert resp.status_code == 404
-    repo.reorganize.assert_called_once_with("doc-1", ["財務"], tenant_id="tenant_a")
+    repo.reorganize.assert_called_once_with(
+        "doc-1", ["財務"], tenant_id="tenant_a", departments=None, confidentiality=None
+    )
 
 
 def test_unlock_as_admin_succeeds():

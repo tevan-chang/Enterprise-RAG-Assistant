@@ -19,6 +19,10 @@ async def generate_report(
     （見 CLAUDE.md 雙層權限隔離），Viewer 的 confidentiality 過濾在 service 層處理。
     """
     result = await run_report_tool_calling(
-        query=payload.query, tenant_id=user.tenant_id, role=user.role, departments=payload.departments
+        query=payload.query,
+        tenant_id=user.tenant_id,
+        role=user.role,
+        user_id=user.user_id,
+        departments=payload.departments,
     )
     return ReportGenerateResponse(content=result["content"] or "", tool_calls=result["tool_calls"])

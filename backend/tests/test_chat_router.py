@@ -51,6 +51,7 @@ def test_query_streams_sse_response_and_forwards_identity():
         "query": "測試問題",
         "tenant_id": "tenant_a",
         "role": "viewer",
+        "user_id": "user-1",
         "departments": None,
         "top_k": None,
     }

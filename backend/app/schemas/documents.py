@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -19,6 +21,7 @@ class DocumentListItem(BaseModel):
     processing_status: str
     classification_status: str
     final_categories: list[str]
+    departments: list[str]
     confidentiality: str
     updated_at: str
 
@@ -57,6 +60,8 @@ class CitationDetailResponse(BaseModel):
 class ReorganizeRequest(BaseModel):
     document_id: str
     manual_categories: list[str] = Field(min_length=1)
+    departments: list[str] | None = None
+    confidentiality: Literal["public", "internal", "restricted"] | None = None
 
     @field_validator("manual_categories")
     @classmethod
@@ -66,11 +71,22 @@ class ReorganizeRequest(BaseModel):
             raise ValueError("manual_categories 不可包含空白字串")
         return cleaned
 
+    @field_validator("departments")
+    @classmethod
+    def strip_departments(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        cleaned = [department.strip() for department in value]
+        if any(not department for department in cleaned):
+            raise ValueError("departments 不可包含空白字串")
+        return cleaned
+
 
 class ReorganizeResponse(BaseModel):
     document_id: str
     classification_status: str
     final_categories: list[str]
+    departments: list[str]
 
 
 class UnlockRequest(BaseModel):

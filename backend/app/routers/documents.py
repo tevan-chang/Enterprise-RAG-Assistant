@@ -86,6 +86,7 @@ async def upload_document(
         pipeline,
         document_id=doc["id"],
         tenant_id=user.tenant_id,
+        user_id=user.user_id,
         file_bytes=file_bytes,
         file_name=file.filename,
     )
@@ -108,6 +109,14 @@ async def reupload_document(
 
     見 spec §4.3：hash 有變且原狀態為 manually_verified 時觸發 flag_for_review，
     不自動解鎖；清除舊 chunks 一律先於寫入新 chunk（見 ChunksRepository.delete_by_document）。
+
+    `update_for_reupload()` → `delete_by_document()` → `add_task(pipeline)` 這三步刻意不包在
+    一個 transaction 裡：三者分屬不同儲存/佇列系統（Postgres row update、Postgres delete、
+    BackgroundTasks 記憶體佇列），沒有跨系統的原子性可用；若中間任一步後容器崩潰，文件會停在
+    `processing_status="parsing"` 且沒有對應 chunk。這是可接受的已知行為——`services/
+    zombie_cleanup.py` 在下次 `lifespan` 啟動時會把逾時仍卡在 parsing/chunking/embedding 的
+    文件標記 `failed`，前端 Polling 看得到明確的失敗狀態，使用者可以重新觸發 reupload，
+    不需要用 transaction 換取這個邊界情境的正確性。
     """
     pipeline = _PIPELINE_BY_CONTENT_TYPE.get(file.content_type)
     if pipeline is None:
@@ -131,6 +140,7 @@ async def reupload_document(
         pipeline,
         document_id=document_id,
         tenant_id=user.tenant_id,
+        user_id=user.user_id,
         file_bytes=file_bytes,
         file_name=doc["file_name"],
     )
@@ -150,6 +160,7 @@ async def list_documents(user: UserContext = Depends(get_current_user)):
             processing_status=doc["processing_status"],
             classification_status=doc["classification_status"],
             final_categories=doc["final_categories"],
+            departments=doc["departments"],
             confidentiality=doc["confidentiality"],
             updated_at=doc["updated_at"],
         )
@@ -263,7 +274,13 @@ async def reorganize_document(payload: ReorganizeRequest, user: UserContext = De
     service_role bypass RLS，不能只靠 DB 擋跨租戶操作），跨租戶或文件不存在皆回 404。
     """
     documents_repo = DocumentsRepository()
-    doc = documents_repo.reorganize(payload.document_id, payload.manual_categories, tenant_id=user.tenant_id)
+    doc = documents_repo.reorganize(
+        payload.document_id,
+        payload.manual_categories,
+        tenant_id=user.tenant_id,
+        departments=payload.departments,
+        confidentiality=payload.confidentiality,
+    )
     if doc is None:
         raise HTTPException(status_code=404, detail="文件不存在")
 
@@ -271,6 +288,7 @@ async def reorganize_document(payload: ReorganizeRequest, user: UserContext = De
         document_id=doc["id"],
         classification_status=doc["classification_status"],
         final_categories=doc["final_categories"],
+        departments=doc["departments"],
     )
 
 

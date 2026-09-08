@@ -104,23 +104,62 @@ class DocumentsRepository:
             "id", document_ids
         ).execute()
 
-    def reorganize(self, document_id: str, manual_categories: list[str], tenant_id: str) -> dict | None:
-        """手動整理：寫入 manual_categories，final_categories 以人工結果為準，
-        狀態鎖升級為 manually_verified（見 spec §4.2 雙軌分類鎖機制）。
+    def apply_auto_classification(self, document_id: str, auto_categories: list[str], tenant_id: str) -> dict | None:
+        """auto_classify 成功時呼叫（見 services/classification.py）：寫入 auto_categories，
+        final_categories 此時尚無人工整理、以 auto 為準，狀態鎖從 pending_auto 推進為 auto_labeled。
 
-        `tenant_id` 直接帶進 WHERE 條件（比照 `delete()`），因為本 client 用 service_role
-        key bypass RLS，不能只靠 DB 擋跨租戶操作（見 CLAUDE.md 雙層權限隔離）。
+        `.neq("classification_status", "manually_verified")` 直接寫進 WHERE（見 spec §4.2 硬性
+        要求），一次 UPDATE 完成條件判斷與寫入，避免「先 get 再 update」在背景任務併發時的
+        race condition；已鎖定的文件此呼叫不會有任何列被更新，回傳 None。
         """
         resp = (
             self._client.table("documents")
             .update(
                 {
-                    "manual_categories": manual_categories,
-                    "final_categories": manual_categories,
-                    "classification_status": "manually_verified",
+                    "auto_categories": auto_categories,
+                    "final_categories": auto_categories,
+                    "classification_status": "auto_labeled",
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
+            .eq("id", document_id)
+            .eq("tenant_id", tenant_id)
+            .neq("classification_status", "manually_verified")
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
+    def reorganize(
+        self,
+        document_id: str,
+        manual_categories: list[str],
+        tenant_id: str,
+        departments: list[str] | None = None,
+        confidentiality: str | None = None,
+    ) -> dict | None:
+        """手動整理：寫入 manual_categories，final_categories 以人工結果為準，
+        狀態鎖升級為 manually_verified（見 spec §4.2 雙軌分類鎖機制）。
+
+        `departments`/`confidentiality` 為 None 代表使用者這次沒有要改，不放進 payload，
+        避免覆寫成空值（見 spec §4.1 Metadata Filter 依賴這兩個欄位有實際資料）。
+
+        `tenant_id` 直接帶進 WHERE 條件（比照 `delete()`），因為本 client 用 service_role
+        key bypass RLS，不能只靠 DB 擋跨租戶操作（見 CLAUDE.md 雙層權限隔離）。
+        """
+        payload = {
+            "manual_categories": manual_categories,
+            "final_categories": manual_categories,
+            "classification_status": "manually_verified",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if departments is not None:
+            payload["departments"] = departments
+        if confidentiality is not None:
+            payload["confidentiality"] = confidentiality
+
+        resp = (
+            self._client.table("documents")
+            .update(payload)
             .eq("id", document_id)
             .eq("tenant_id", tenant_id)
             .execute()
