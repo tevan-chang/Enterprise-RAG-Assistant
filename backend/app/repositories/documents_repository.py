@@ -104,6 +104,31 @@ class DocumentsRepository:
             "id", document_ids
         ).execute()
 
+    def apply_auto_classification(self, document_id: str, auto_categories: list[str], tenant_id: str) -> dict | None:
+        """auto_classify 成功時呼叫（見 services/classification.py）：寫入 auto_categories，
+        final_categories 此時尚無人工整理、以 auto 為準，狀態鎖從 pending_auto 推進為 auto_labeled。
+
+        `.neq("classification_status", "manually_verified")` 直接寫進 WHERE（見 spec §4.2 硬性
+        要求），一次 UPDATE 完成條件判斷與寫入，避免「先 get 再 update」在背景任務併發時的
+        race condition；已鎖定的文件此呼叫不會有任何列被更新，回傳 None。
+        """
+        resp = (
+            self._client.table("documents")
+            .update(
+                {
+                    "auto_categories": auto_categories,
+                    "final_categories": auto_categories,
+                    "classification_status": "auto_labeled",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            .eq("id", document_id)
+            .eq("tenant_id", tenant_id)
+            .neq("classification_status", "manually_verified")
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+
     def reorganize(self, document_id: str, manual_categories: list[str], tenant_id: str) -> dict | None:
         """手動整理：寫入 manual_categories，final_categories 以人工結果為準，
         狀態鎖升級為 manually_verified（見 spec §4.2 雙軌分類鎖機制）。

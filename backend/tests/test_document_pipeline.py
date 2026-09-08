@@ -26,6 +26,7 @@ async def test_process_pdf_document_triggers_fallback_on_parsing_error():
         patch(f"{_MODULE}.extract_pdf_pages", side_effect=PDFParsingError("boom")) as mock_extract,
         patch(f"{_MODULE}.LlamaParseAdapter") as MockAdapter,
         patch(f"{_MODULE}.embed_texts", new=_mock_embed_texts()),
+        patch(f"{_MODULE}.auto_classify", new=AsyncMock()),
     ):
         documents_repo, chunks_repo = MockDocumentsRepo.return_value, MockChunksRepo.return_value
         MockAdapter.return_value.parse = AsyncMock(return_value="fallback markdown content")
@@ -50,6 +51,7 @@ async def test_process_pdf_document_skips_fallback_when_parsing_succeeds():
         ),
         patch(f"{_MODULE}.LlamaParseAdapter") as MockAdapter,
         patch(f"{_MODULE}.embed_texts", new=_mock_embed_texts()),
+        patch(f"{_MODULE}.auto_classify", new=AsyncMock()) as mock_auto_classify,
     ):
         documents_repo = MockDocumentsRepo.return_value
         MockAdapter.return_value.parse = AsyncMock()
@@ -58,6 +60,9 @@ async def test_process_pdf_document_skips_fallback_when_parsing_succeeds():
 
         MockAdapter.return_value.parse.assert_not_awaited()
         assert _final_status(documents_repo) == "completed"
+        mock_auto_classify.assert_awaited_once()
+        assert mock_auto_classify.call_args.kwargs["document_id"] == "doc-1"
+        assert mock_auto_classify.call_args.kwargs["file_name"] == "a.pdf"
 
 
 async def test_process_pdf_document_marks_failed_when_fallback_also_fails():
@@ -87,6 +92,7 @@ async def test_process_xlsx_document_triggers_fallback_on_parsing_error():
         patch(f"{_MODULE}.extract_xlsx_sheets", side_effect=XLSXParsingError("boom")) as mock_extract,
         patch(f"{_MODULE}.LlamaParseAdapter") as MockAdapter,
         patch(f"{_MODULE}.embed_texts", new=_mock_embed_texts()),
+        patch(f"{_MODULE}.auto_classify", new=AsyncMock()),
     ):
         documents_repo, chunks_repo = MockDocumentsRepo.return_value, MockChunksRepo.return_value
         MockAdapter.return_value.parse = AsyncMock(return_value="fallback markdown content")
@@ -108,6 +114,7 @@ async def test_process_xlsx_document_skips_fallback_when_parsing_succeeds():
         patch(f"{_MODULE}.extract_xlsx_sheets", return_value=[_sheet_frame()]),
         patch(f"{_MODULE}.LlamaParseAdapter") as MockAdapter,
         patch(f"{_MODULE}.embed_texts", new=_mock_embed_texts()),
+        patch(f"{_MODULE}.auto_classify", new=AsyncMock()),
     ):
         documents_repo = MockDocumentsRepo.return_value
         MockAdapter.return_value.parse = AsyncMock()
@@ -128,6 +135,7 @@ async def test_process_xlsx_document_persists_structured_sheets_for_report_mode(
         patch(f"{_MODULE}.extract_xlsx_sheets", return_value=[_sheet_frame()]),
         patch(f"{_MODULE}.LlamaParseAdapter"),
         patch(f"{_MODULE}.embed_texts", new=_mock_embed_texts()),
+        patch(f"{_MODULE}.auto_classify", new=AsyncMock()),
     ):
         documents_repo = MockDocumentsRepo.return_value
 
@@ -148,6 +156,7 @@ async def test_process_xlsx_document_fallback_path_does_not_persist_structured_s
         patch(f"{_MODULE}.extract_xlsx_sheets", side_effect=XLSXParsingError("boom")),
         patch(f"{_MODULE}.LlamaParseAdapter") as MockAdapter,
         patch(f"{_MODULE}.embed_texts", new=_mock_embed_texts()),
+        patch(f"{_MODULE}.auto_classify", new=AsyncMock()),
     ):
         documents_repo = MockDocumentsRepo.return_value
         MockAdapter.return_value.parse = AsyncMock(return_value="fallback markdown content")

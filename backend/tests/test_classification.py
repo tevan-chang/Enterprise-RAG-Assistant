@@ -1,9 +1,9 @@
 import hashlib
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.classification import flag_for_review, on_file_reupload
+from app.services.classification import auto_classify, flag_for_review, on_file_reupload
 
 _MODULE = "app.services.classification"
 
@@ -71,3 +71,69 @@ def test_on_file_reupload_raises_when_document_missing():
 
     with pytest.raises(ValueError):
         on_file_reupload("missing-doc", b"content", documents_repo=repo)
+
+
+def _mock_openai_client(content: str) -> MagicMock:
+    response = MagicMock()
+    response.choices = [MagicMock(message=MagicMock(content=content))]
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=response)
+    return client
+
+
+async def test_auto_classify_writes_categories_on_success():
+    repo = MagicMock()
+    client = _mock_openai_client('["財務報表", "季度報告"]')
+
+    with patch(f"{_MODULE}._get_client", return_value=client):
+        await auto_classify(
+            "doc-1", "tenant_a", "q3.pdf", ["第一段內容", "第二段內容"], documents_repo=repo
+        )
+
+    repo.apply_auto_classification.assert_called_once_with(
+        "doc-1", ["財務報表", "季度報告"], "tenant_a"
+    )
+
+
+async def test_auto_classify_delegates_lock_enforcement_to_repository():
+    """auto_classify 本身不判斷鎖定狀態，一律呼叫 apply_auto_classification；真正擋下覆蓋
+    manually_verified 文件的是該 repository 方法的 WHERE 條件（見 test_documents_repository.py），
+    這裡只驗證即使 repo 因鎖定而回傳 None（未更新任何列），auto_classify 也不會例外或重試。
+    """
+    repo = MagicMock()
+    repo.apply_auto_classification.return_value = None
+    client = _mock_openai_client('["財務報表"]')
+
+    with patch(f"{_MODULE}._get_client", return_value=client):
+        await auto_classify("doc-1", "tenant_a", "q3.pdf", ["內容"], documents_repo=repo)
+
+    repo.apply_auto_classification.assert_called_once_with("doc-1", ["財務報表"], "tenant_a")
+
+
+async def test_auto_classify_swallows_llm_error_and_reports_sentry():
+    repo = MagicMock()
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(side_effect=RuntimeError("openai down"))
+
+    with (
+        patch(f"{_MODULE}._get_client", return_value=client),
+        patch(f"{_MODULE}.sentry_sdk") as mock_sentry,
+    ):
+        await auto_classify("doc-1", "tenant_a", "q3.pdf", ["內容"], documents_repo=repo)
+
+    mock_sentry.capture_exception.assert_called_once()
+    repo.apply_auto_classification.assert_not_called()
+
+
+async def test_auto_classify_swallows_invalid_json_and_reports_sentry():
+    repo = MagicMock()
+    client = _mock_openai_client("不是 JSON 的自由文字回覆")
+
+    with (
+        patch(f"{_MODULE}._get_client", return_value=client),
+        patch(f"{_MODULE}.sentry_sdk") as mock_sentry,
+    ):
+        await auto_classify("doc-1", "tenant_a", "q3.pdf", ["內容"], documents_repo=repo)
+
+    mock_sentry.capture_exception.assert_called_once()
+    repo.apply_auto_classification.assert_not_called()
