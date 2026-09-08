@@ -27,4 +27,6 @@ Day 8 Report Mode 需要 `compute_table_metric` tool 在查詢當下對 XLSX 表
 **付出的代價**：
 - `documents` table 多了一個可能不小的 jsonb 欄位，大型 XLSX（例如上萬列）會讓單一 row 明顯變胖；目前 MVP 測試規模（60+ 列）沒有問題，但若之後要處理大檔案，這個設計需要重新評估（例如改回 Storage 或限制列數／改用獨立表）。
 - LlamaParse fallback 路徑（純文字）沒有結構化資料可存，這類文件的 `compute_table_metric` 呼叫一律會落入 `ColumnNotFoundError` 的結構化錯誤路徑——這是刻意行為（沒有結構化表格就不能做精確數值運算），但屬於已知限制，不是 bug。
-- 只有解析成功當下寫入一次；`services/classification.py` 的 `on_file_reupload` 目前只處理分類鎖，沒有連動更新 `xlsx_sheets`，若同一份文件被覆蓋重傳，需要之後另外補上同步邏輯。
+- ~~只有解析成功當下寫入一次；`services/classification.py` 的 `on_file_reupload` 目前只處理分類鎖，沒有連動更新 `xlsx_sheets`，若同一份文件被覆蓋重傳，需要之後另外補上同步邏輯。~~ **已解決**：`POST /{document_id}/reupload` 端點（`routers/documents.py`）會重跑整條 pipeline——`process_xlsx_document` 本來就會在 pandas 解析成功時呼叫 `update_xlsx_sheets()`，reupload 觸發同一條 pipeline 因此自然帶出新的 `xlsx_sheets`，不需要另外補同步邏輯。
+
+`documents.file_path` 從 Day 1 就存在但從未被寫入（見 Context），這是**有意識預留**的欄位：目前架構刻意不接 Supabase Storage（見上方選項 1 的取捨），但保留這個欄位讓「之後要接 Storage、需要記錄原始檔案路徑」時不必再改 schema，不是沒人清理的殘留欄位。
