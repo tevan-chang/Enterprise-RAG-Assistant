@@ -19,7 +19,7 @@ export function StatCard({
   loading,
 }: {
   label: string;
-  value: number;
+  value: number | string;
   icon: LucideIcon;
   tone: keyof typeof TONE_CLASS;
   spin?: boolean;

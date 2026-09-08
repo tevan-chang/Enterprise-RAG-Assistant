@@ -1,9 +1,18 @@
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from app.config import settings
 from app.services.report import run_report_tool_calling
 
 _MODULE = "app.services.report"
+
+
+class _FakeUsage:
+    def __init__(self, prompt_tokens: int = 10, completion_tokens: int = 5):
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
 
 
 class _FakeFunctionCall:
@@ -38,14 +47,24 @@ class _FakeChoice:
 
 
 class _FakeResponse:
-    def __init__(self, message):
+    def __init__(self, message, usage: _FakeUsage | None = None):
         self.choices = [_FakeChoice(message)]
+        self.usage = usage or _FakeUsage()
 
 
 def _client_with_responses(*responses):
     client = MagicMock()
     client.chat.completions.create = AsyncMock(side_effect=list(responses))
     return client
+
+
+@pytest.fixture(autouse=True)
+def _mock_record_usage():
+    """避免用量記錄打真實 Supabase（見 app/services/token_usage.py）；個別測試要驗證
+    呼叫內容時把這個 fixture 當參數注入即可取得同一個 mock。
+    """
+    with patch(f"{_MODULE}.record_usage") as mock:
+        yield mock
 
 
 async def test_run_report_tool_calling_without_tool_call_returns_direct_content():
@@ -55,10 +74,31 @@ async def test_run_report_tool_calling_without_tool_call_returns_direct_content(
         patch(f"{_MODULE}._get_client", return_value=client),
         patch(f"{_MODULE}.build_xlsx_schema_summary", return_value=[]),
     ):
-        result = await run_report_tool_calling(query="你好", tenant_id="tenant_a", role="admin")
+        result = await run_report_tool_calling(query="你好", tenant_id="tenant_a", role="admin", user_id="user-1")
 
     assert result == {"content": "不需要工具就能回答", "tool_calls": []}
     assert client.chat.completions.create.await_count == 1
+
+
+async def test_run_report_tool_calling_records_usage_for_direct_content(_mock_record_usage):
+    client = _client_with_responses(
+        _FakeResponse(_FakeMessage(content="不需要工具就能回答"), usage=_FakeUsage(prompt_tokens=15, completion_tokens=7))
+    )
+
+    with (
+        patch(f"{_MODULE}._get_client", return_value=client),
+        patch(f"{_MODULE}.build_xlsx_schema_summary", return_value=[]),
+    ):
+        await run_report_tool_calling(query="你好", tenant_id="tenant_a", role="admin", user_id="user-1")
+
+    _mock_record_usage.assert_called_once_with(
+        tenant_id="tenant_a",
+        user_id="user-1",
+        feature="report",
+        model=settings.chat_model,
+        prompt_tokens=15,
+        completion_tokens=7,
+    )
 
 
 async def test_run_report_tool_calling_executes_compute_table_metric_then_returns_final_content():
@@ -78,7 +118,9 @@ async def test_run_report_tool_calling_executes_compute_table_metric_then_return
         patch(f"{_MODULE}.build_xlsx_schema_summary", return_value=[{"document_id": "doc-1"}]),
         patch(f"{_MODULE}.compute_table_metric", new=fake_compute),
     ):
-        result = await run_report_tool_calling(query="業績加總多少", tenant_id="tenant_a", role="admin")
+        result = await run_report_tool_calling(
+            query="業績加總多少", tenant_id="tenant_a", role="admin", user_id="user-1"
+        )
 
     assert result["content"] == "總業績為 400000"
     assert result["tool_calls"] == [
@@ -105,6 +147,39 @@ async def test_run_report_tool_calling_executes_compute_table_metric_then_return
     assert tool_messages[0]["tool_call_id"] == "call-1"
 
 
+async def test_run_report_tool_calling_sums_usage_across_two_rounds(_mock_record_usage):
+    """兩輪呼叫（tool call + 收斂）的 usage 要加總後只記錄一筆，不是各記各的。"""
+    tool_call = _FakeToolCall(
+        "call-1",
+        "compute_table_metric",
+        json.dumps({"document_id": "doc-1", "sheet_name": "業績", "column": "業績 (NT$)", "operation": "sum"}),
+    )
+    first_response = _FakeResponse(
+        _FakeMessage(content=None, tool_calls=[tool_call]), usage=_FakeUsage(prompt_tokens=40, completion_tokens=10)
+    )
+    second_response = _FakeResponse(
+        _FakeMessage(content="總業績為 400000"), usage=_FakeUsage(prompt_tokens=60, completion_tokens=12)
+    )
+    client = _client_with_responses(first_response, second_response)
+    fake_compute = AsyncMock(return_value={"status": "success", "result": 400000.0})
+
+    with (
+        patch(f"{_MODULE}._get_client", return_value=client),
+        patch(f"{_MODULE}.build_xlsx_schema_summary", return_value=[{"document_id": "doc-1"}]),
+        patch(f"{_MODULE}.compute_table_metric", new=fake_compute),
+    ):
+        await run_report_tool_calling(query="業績加總多少", tenant_id="tenant_a", role="admin", user_id="user-1")
+
+    _mock_record_usage.assert_called_once_with(
+        tenant_id="tenant_a",
+        user_id="user-1",
+        feature="report",
+        model=settings.chat_model,
+        prompt_tokens=100,
+        completion_tokens=22,
+    )
+
+
 async def test_run_report_tool_calling_executes_query_documents():
     tool_call = _FakeToolCall("call-2", "query_documents", json.dumps({"query": "財報重點", "top_k": 3}))
     first_response = _FakeResponse(_FakeMessage(content=None, tool_calls=[tool_call]))
@@ -118,7 +193,9 @@ async def test_run_report_tool_calling_executes_query_documents():
         patch(f"{_MODULE}.build_xlsx_schema_summary", return_value=[]),
         patch(f"{_MODULE}.query_documents", new=fake_query),
     ):
-        result = await run_report_tool_calling(query="財報重點是什麼", tenant_id="tenant_a", role="viewer")
+        result = await run_report_tool_calling(
+        query="財報重點是什麼", tenant_id="tenant_a", role="viewer", user_id="user-1"
+    )
 
     assert result["content"] == "根據檢索結果..."
     fake_query.assert_awaited_once_with(
@@ -141,7 +218,7 @@ async def test_run_report_tool_calling_forwards_departments_to_query_documents()
         patch(f"{_MODULE}.query_documents", new=fake_query),
     ):
         await run_report_tool_calling(
-            query="財報重點是什麼", tenant_id="tenant_a", role="viewer", departments=["財務部"]
+            query="財報重點是什麼", tenant_id="tenant_a", role="viewer", user_id="user-1", departments=["財務部"]
         )
 
     fake_query.assert_awaited_once_with(
@@ -160,7 +237,7 @@ async def test_run_report_tool_calling_unknown_tool_name_returns_structured_erro
         patch(f"{_MODULE}.build_xlsx_schema_summary", return_value=[]),
         patch(f"{_MODULE}.sentry_sdk") as mock_sentry,
     ):
-        result = await run_report_tool_calling(query="測試", tenant_id="tenant_a", role="admin")
+        result = await run_report_tool_calling(query="測試", tenant_id="tenant_a", role="admin", user_id="user-1")
 
     assert result["tool_calls"][0]["result"]["error_type"] == "UnknownTool"
     assert result["content"] == "這個工具不存在，無法執行"
@@ -187,7 +264,7 @@ async def test_run_report_tool_calling_compute_table_metric_error_is_reported_to
         patch(f"{_MODULE}.compute_table_metric", new=fake_compute),
         patch(f"{_MODULE}.sentry_sdk") as mock_sentry,
     ):
-        result = await run_report_tool_calling(query="測試", tenant_id="tenant_a", role="admin")
+        result = await run_report_tool_calling(query="測試", tenant_id="tenant_a", role="admin", user_id="user-1")
 
     assert result["tool_calls"][0]["result"] == error_result
     mock_sentry.capture_message.assert_called_once()

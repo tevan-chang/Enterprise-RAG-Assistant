@@ -115,6 +115,7 @@ def test_upload_pdf_triggers_background_task_with_correct_pipeline():
     assert kwargs == {
         "document_id": "doc-1",
         "tenant_id": "tenant_a",
+        "user_id": "user-1",
         "file_bytes": b"%PDF-1.4 fake",
         "file_name": "a.pdf",
     }
@@ -143,6 +144,7 @@ def test_upload_xlsx_triggers_background_task_with_correct_pipeline():
     assert kwargs == {
         "document_id": "doc-2",
         "tenant_id": "tenant_a",
+        "user_id": "user-1",
         "file_bytes": b"fake xlsx bytes",
         "file_name": "b.xlsx",
     }
@@ -296,6 +298,7 @@ def test_reupload_as_editor_or_admin_succeeds():
         assert add_task_kwargs == {
             "document_id": "doc-1",
             "tenant_id": "tenant_a",
+            "user_id": "user-1",
             "file_bytes": b"new content",
             "file_name": "a.pdf",
         }

@@ -61,6 +61,14 @@ export type ReportGenerateResponse = {
   tool_calls: ReportToolCall[];
 };
 
+/** 本租戶累計 token 用量與估算 cost（見 backend/app/routers/usage.py，Demo 版計費）。 */
+export type UsageResponse = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+};
+
 export class ApiError extends Error {
   /** 後端結構化錯誤（例如 409 detail 為 dict）時，解析後的 JSON 內容；純文字錯誤則為 undefined。 */
   public body: unknown;
@@ -209,6 +217,10 @@ export function generateReport(query: string, accessToken: string): Promise<Repo
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query }),
   });
+}
+
+export function getUsage(accessToken: string): Promise<UsageResponse> {
+  return request<UsageResponse>("/api/usage", accessToken);
 }
 
 /**

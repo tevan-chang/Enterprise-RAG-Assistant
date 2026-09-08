@@ -42,12 +42,16 @@ async def test_process_pdf_document_completes_via_real_llamaparse_fallback():
         patch(f"{_MODULE}.DocumentsRepository") as MockDocumentsRepo,
         patch(f"{_MODULE}.ChunksRepository") as MockChunksRepo,
         patch(f"{_MODULE}.extract_pdf_pages", side_effect=PDFParsingError("模擬原生解析異常")),
-        patch(f"{_MODULE}.embed_texts", new=AsyncMock(side_effect=lambda texts: [[0.0] * 3 for _ in texts])),
+        patch(
+            f"{_MODULE}.embed_texts",
+            new=AsyncMock(side_effect=lambda texts, **kwargs: [[0.0] * 3 for _ in texts]),
+        ),
+        patch(f"{_MODULE}.auto_classify", new=AsyncMock()),
     ):
         documents_repo = MockDocumentsRepo.return_value
         chunks_repo = MockChunksRepo.return_value
 
-        await process_pdf_document("doc-live-1", "tenant_a", file_bytes, "test_document.pdf")
+        await process_pdf_document("doc-live-1", "tenant_a", "user-1", file_bytes, "test_document.pdf")
 
         final_status = documents_repo.update_status.call_args_list[-1].args[1]
         assert final_status == "completed"

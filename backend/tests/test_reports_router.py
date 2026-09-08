@@ -47,7 +47,7 @@ def test_generate_report_returns_content_and_tool_calls_and_forwards_identity():
     assert resp.status_code == 200
     assert resp.json() == fake_result
     mock_run.assert_awaited_once_with(
-        query="業績加總多少", tenant_id="tenant_a", role="editor", departments=None
+        query="業績加總多少", tenant_id="tenant_a", role="editor", user_id="user-1", departments=None
     )
 
 
@@ -73,6 +73,7 @@ def test_generate_report_forwards_departments():
         "query": "業績加總多少",
         "tenant_id": "tenant_a",
         "role": "editor",
+        "user_id": "user-1",
         "departments": ["財務部"],
     }
 

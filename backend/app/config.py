@@ -22,6 +22,11 @@ class Settings(BaseSettings):
 
     retrieval_top_k: int = 5
 
+    # Demo 版計費用單一 blended 費率換算 cost（見 spec §10：只做累加 + 前端即時試算，
+    # 不做真實計費結算），不分 chat/report/embedding/classification 分開計價，避免過度設計。
+    token_price_per_1k_prompt_usd: float = 0.005
+    token_price_per_1k_completion_usd: float = 0.015
+
     allowed_origins: str = "http://localhost:3000"
 
     @property

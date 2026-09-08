@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 async def _embed_and_store_chunks(
     document_id: str,
     tenant_id: str,
+    user_id: str,
     file_name: str,
     chunks: list[Chunk],
     documents_repo: DocumentsRepository,
@@ -33,7 +34,9 @@ async def _embed_and_store_chunks(
     """
     documents_repo.update_status(document_id, "embedding")
     try:
-        vectors = await embed_texts([chunk.content for chunk in chunks])
+        vectors = await embed_texts(
+            [chunk.content for chunk in chunks], tenant_id=tenant_id, user_id=user_id
+        )
     except EmbeddingError as exc:
         logger.error("chunk embedding 生成失敗: doc=%s err=%s", document_id, exc)
         sentry_sdk.capture_exception(exc)
@@ -49,13 +52,16 @@ async def _embed_and_store_chunks(
     await auto_classify(
         document_id=document_id,
         tenant_id=tenant_id,
+        user_id=user_id,
         file_name=file_name,
         chunk_texts=[chunk.content for chunk in chunks[:2]],
         documents_repo=documents_repo,
     )
 
 
-async def process_pdf_document(document_id: str, tenant_id: str, file_bytes: bytes, file_name: str) -> None:
+async def process_pdf_document(
+    document_id: str, tenant_id: str, user_id: str, file_bytes: bytes, file_name: str
+) -> None:
     """BackgroundTasks 派發的 in-process pipeline：parsing → chunking → completed/failed。
 
     純函式風格（不依賴外部 worker 狀態），未來若要轉移到 Celery/SQS 可直接複用
@@ -74,7 +80,9 @@ async def process_pdf_document(document_id: str, tenant_id: str, file_bytes: byt
 
         documents_repo.update_status(document_id, "chunking")
         chunks = chunk_pages(pages, settings.chunk_size_tokens, settings.chunk_overlap_tokens)
-        await _embed_and_store_chunks(document_id, tenant_id, file_name, chunks, documents_repo, chunks_repo)
+        await _embed_and_store_chunks(
+            document_id, tenant_id, user_id, file_name, chunks, documents_repo, chunks_repo
+        )
     except (PDFParsingError, FallbackParsingError) as exc:
         logger.error("文件解析失敗（含 fallback）: doc=%s err=%s", document_id, exc)
         sentry_sdk.capture_exception(exc)
@@ -85,7 +93,9 @@ async def process_pdf_document(document_id: str, tenant_id: str, file_bytes: byt
         documents_repo.update_status(document_id, "failed")
 
 
-async def process_xlsx_document(document_id: str, tenant_id: str, file_bytes: bytes, file_name: str) -> None:
+async def process_xlsx_document(
+    document_id: str, tenant_id: str, user_id: str, file_bytes: bytes, file_name: str
+) -> None:
     """BackgroundTasks 派發的 XLSX pipeline：parsing → chunking → completed/failed（見 roadmap Day 4）。"""
     documents_repo = DocumentsRepository()
     chunks_repo = ChunksRepository()
@@ -102,7 +112,9 @@ async def process_xlsx_document(document_id: str, tenant_id: str, file_bytes: by
             documents_repo.update_status(document_id, "chunking")
             chunks = chunk_plain_text(fallback_text, settings.chunk_size_tokens, settings.chunk_overlap_tokens)
 
-        await _embed_and_store_chunks(document_id, tenant_id, file_name, chunks, documents_repo, chunks_repo)
+        await _embed_and_store_chunks(
+            document_id, tenant_id, user_id, file_name, chunks, documents_repo, chunks_repo
+        )
     except (XLSXParsingError, FallbackParsingError) as exc:
         logger.error("文件解析失敗（含 fallback）: doc=%s err=%s", document_id, exc)
         sentry_sdk.capture_exception(exc)

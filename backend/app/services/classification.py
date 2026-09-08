@@ -8,6 +8,7 @@ from openai import AsyncOpenAI
 
 from app.config import settings
 from app.repositories.documents_repository import DocumentsRepository
+from app.services.token_usage import record_usage
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ def _get_client() -> AsyncOpenAI:
 async def auto_classify(
     document_id: str,
     tenant_id: str,
+    user_id: str,
     file_name: str,
     chunk_texts: list[str],
     documents_repo: DocumentsRepository | None = None,
@@ -59,6 +61,14 @@ async def auto_classify(
         sentry_sdk.capture_exception(exc)
         return
 
+    record_usage(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        feature="classification",
+        model=settings.chat_model,
+        prompt_tokens=response.usage.prompt_tokens,
+        completion_tokens=response.usage.completion_tokens,
+    )
     repo.apply_auto_classification(document_id, categories, tenant_id)
 
 

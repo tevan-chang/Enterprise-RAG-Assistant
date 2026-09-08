@@ -16,7 +16,7 @@ def _final_status(documents_repo: MagicMock) -> str:
 
 def _mock_embed_texts():
     """回傳與輸入等長的假向量，避免測試打真實 OpenAI API（見 test_embeddings.py 才是驗證 embed_texts 本身）。"""
-    return AsyncMock(side_effect=lambda texts: [[0.0] * 3 for _ in texts])
+    return AsyncMock(side_effect=lambda texts, **kwargs: [[0.0] * 3 for _ in texts])
 
 
 async def test_process_pdf_document_triggers_fallback_on_parsing_error():
@@ -31,7 +31,7 @@ async def test_process_pdf_document_triggers_fallback_on_parsing_error():
         documents_repo, chunks_repo = MockDocumentsRepo.return_value, MockChunksRepo.return_value
         MockAdapter.return_value.parse = AsyncMock(return_value="fallback markdown content")
 
-        await process_pdf_document("doc-1", "tenant_a", b"file-bytes", "a.pdf")
+        await process_pdf_document("doc-1", "tenant_a", "user-1", b"file-bytes", "a.pdf")
 
         mock_extract.assert_called_once_with(b"file-bytes")
         MockAdapter.return_value.parse.assert_awaited_once_with(b"file-bytes", "a.pdf")
@@ -56,7 +56,7 @@ async def test_process_pdf_document_skips_fallback_when_parsing_succeeds():
         documents_repo = MockDocumentsRepo.return_value
         MockAdapter.return_value.parse = AsyncMock()
 
-        await process_pdf_document("doc-1", "tenant_a", b"file-bytes", "a.pdf")
+        await process_pdf_document("doc-1", "tenant_a", "user-1", b"file-bytes", "a.pdf")
 
         MockAdapter.return_value.parse.assert_not_awaited()
         assert _final_status(documents_repo) == "completed"
@@ -75,7 +75,7 @@ async def test_process_pdf_document_marks_failed_when_fallback_also_fails():
         documents_repo, chunks_repo = MockDocumentsRepo.return_value, MockChunksRepo.return_value
         MockAdapter.return_value.parse = AsyncMock(side_effect=FallbackParsingError("llamaparse down"))
 
-        await process_pdf_document("doc-1", "tenant_a", b"file-bytes", "a.pdf")
+        await process_pdf_document("doc-1", "tenant_a", "user-1", b"file-bytes", "a.pdf")
 
         assert _final_status(documents_repo) == "failed"
         chunks_repo.bulk_insert.assert_not_called()
@@ -97,7 +97,7 @@ async def test_process_xlsx_document_triggers_fallback_on_parsing_error():
         documents_repo, chunks_repo = MockDocumentsRepo.return_value, MockChunksRepo.return_value
         MockAdapter.return_value.parse = AsyncMock(return_value="fallback markdown content")
 
-        await process_xlsx_document("doc-2", "tenant_a", b"file-bytes", "a.xlsx")
+        await process_xlsx_document("doc-2", "tenant_a", "user-1", b"file-bytes", "a.xlsx")
 
         mock_extract.assert_called_once_with(b"file-bytes")
         MockAdapter.return_value.parse.assert_awaited_once_with(b"file-bytes", "a.xlsx")
@@ -119,7 +119,7 @@ async def test_process_xlsx_document_skips_fallback_when_parsing_succeeds():
         documents_repo = MockDocumentsRepo.return_value
         MockAdapter.return_value.parse = AsyncMock()
 
-        await process_xlsx_document("doc-2", "tenant_a", b"file-bytes", "a.xlsx")
+        await process_xlsx_document("doc-2", "tenant_a", "user-1", b"file-bytes", "a.xlsx")
 
         MockAdapter.return_value.parse.assert_not_awaited()
         assert _final_status(documents_repo) == "completed"
@@ -139,7 +139,7 @@ async def test_process_xlsx_document_persists_structured_sheets_for_report_mode(
     ):
         documents_repo = MockDocumentsRepo.return_value
 
-        await process_xlsx_document("doc-2", "tenant_a", b"file-bytes", "a.xlsx")
+        await process_xlsx_document("doc-2", "tenant_a", "user-1", b"file-bytes", "a.xlsx")
 
         documents_repo.update_xlsx_sheets.assert_called_once()
         doc_id, xlsx_sheets = documents_repo.update_xlsx_sheets.call_args.args
@@ -161,7 +161,7 @@ async def test_process_xlsx_document_fallback_path_does_not_persist_structured_s
         documents_repo = MockDocumentsRepo.return_value
         MockAdapter.return_value.parse = AsyncMock(return_value="fallback markdown content")
 
-        await process_xlsx_document("doc-2", "tenant_a", b"file-bytes", "a.xlsx")
+        await process_xlsx_document("doc-2", "tenant_a", "user-1", b"file-bytes", "a.xlsx")
 
         documents_repo.update_xlsx_sheets.assert_not_called()
 
@@ -176,7 +176,7 @@ async def test_process_xlsx_document_marks_failed_when_fallback_also_fails():
         documents_repo, chunks_repo = MockDocumentsRepo.return_value, MockChunksRepo.return_value
         MockAdapter.return_value.parse = AsyncMock(side_effect=FallbackParsingError("llamaparse down"))
 
-        await process_xlsx_document("doc-2", "tenant_a", b"file-bytes", "a.xlsx")
+        await process_xlsx_document("doc-2", "tenant_a", "user-1", b"file-bytes", "a.xlsx")
 
         assert _final_status(documents_repo) == "failed"
         chunks_repo.bulk_insert.assert_not_called()

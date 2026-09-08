@@ -12,6 +12,7 @@ from app.services.report_tools import (
     compute_table_metric,
     query_documents,
 )
+from app.services.token_usage import record_usage
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ async def _dispatch_tool_call(tool_call, tenant_id: str, role: str, departments:
 
 
 async def run_report_tool_calling(
-    query: str, tenant_id: str, role: str, departments: list[str] | None = None
+    query: str, tenant_id: str, role: str, user_id: str, departments: list[str] | None = None
 ) -> dict:
     """Report Mode bounded tool-calling（見 spec §2.4 / CLAUDE.md Guardrail #5）：固定最多兩輪
     OpenAI 呼叫——第一輪決定要不要呼叫工具（可能同時呼叫多個），第二輪把工具結果收斂成最終回答，
@@ -103,6 +104,14 @@ async def run_report_tool_calling(
     tool_calls = message.tool_calls or []
 
     if not tool_calls:
+        record_usage(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            feature="report",
+            model=settings.chat_model,
+            prompt_tokens=response.usage.prompt_tokens,
+            completion_tokens=response.usage.completion_tokens,
+        )
         return {"content": message.content, "tool_calls": []}
 
     messages.append(
@@ -127,4 +136,12 @@ async def run_report_tool_calling(
 
     # 第二輪不帶 tools，杜絕模型再度觸發 tool call（見 CLAUDE.md Guardrail #5：bounded 1-2 輪）。
     final_response = await client.chat.completions.create(model=settings.chat_model, messages=messages)
+    record_usage(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        feature="report",
+        model=settings.chat_model,
+        prompt_tokens=response.usage.prompt_tokens + final_response.usage.prompt_tokens,
+        completion_tokens=response.usage.completion_tokens + final_response.usage.completion_tokens,
+    )
     return {"content": final_response.choices[0].message.content, "tool_calls": executed}

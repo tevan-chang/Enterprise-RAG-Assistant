@@ -86,6 +86,7 @@ async def upload_document(
         pipeline,
         document_id=doc["id"],
         tenant_id=user.tenant_id,
+        user_id=user.user_id,
         file_bytes=file_bytes,
         file_name=file.filename,
     )
@@ -131,6 +132,7 @@ async def reupload_document(
         pipeline,
         document_id=document_id,
         tenant_id=user.tenant_id,
+        user_id=user.user_id,
         file_bytes=file_bytes,
         file_name=doc["file_name"],
     )
