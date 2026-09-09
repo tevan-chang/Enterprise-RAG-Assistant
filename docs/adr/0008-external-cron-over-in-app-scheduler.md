@@ -22,16 +22,18 @@
 - 排程時間精度綁定外部服務的執行間隔與可用性，不在應用程式的控制範圍內；若外部 Cron 服務本身故障或誤刪排程，應用端不會主動感知（沒有「預期應該被呼叫但沒被呼叫」的偵測機制）。
 - 觸發時機與應用程式部署是分離的兩份設定（`SYNC_API_KEY` 環境變數 + 外部服務的 cron 設定），新增/變更排程頻率需要到外部服務手動調整，不是單一 repo 內可以 code review 的變更。
 
-## 面試防守要點
+## 常見問題與回答依據
 
 - 這條端點不排入 2 分鐘 Demo 劇本（見 spec §13.2），是「架構能力展示」，被問到才展示。
 - 預期問題「為什麼不做應用內排程？」→ 見上方 Context/Decision。
 - 預期問題「怎麼避免同步時重複處理？」→ 見 0007-sync-endpoint-api-key-and-zombie-cleanup-reuse.md 與 spec §4.3 的 `file_content_hash` 增量判斷邏輯，同步觸發的是既有 pipeline，天生具備幂等性，不需要額外的「已同步過」標記。
-- 屬於 roadmap Day 9-10（Buffer）任務，跟 Gmail Adapter、Vercel/Render 部署、`/health` 防休眠 ping 是同批次工作。
+- 預期問題「`sync-knowledge-base` 用 GitHub Actions，`/health` 防休眠 ping 卻用 Cron-job.org，為什麼兩個排程用不同服務？」→ 這是 repo 是 **Private** 這個具體限制推出來的取捨，不是隨意選的：GitHub Free 方案 Private repo 只有 2000 分鐘/月 Actions 額度，`/health` 需要 <15 分鐘觸發一次才能防止 Render 免費層 idle 休眠，若選每 10 分鐘（一天 144 次），一個月就要燒 4000+ 分鐘，遠超額度；`sync-knowledge-base` 一天只跑 1 次，一個月才耗約 30 分鐘，額度內完全沒問題，可以留在 repo 內用 GitHub Actions（版本可追蹤、code review 得到）。`/health` 因此改用 Cron-job.org 這個對免費用量沒有月配額限制的外部服務（已查證：官方 FAQ 明講不限制 cronjob 數量、最短間隔可到 1 分鐘、無日/月執行次數上限，只在濫用時保留停權權利），每 10 分鐘 ping 對它而言用量極輕。這題答得出來代表對「免費額度」這種真實維運限制有具體感知，不是紙上談兵。
+- 預期問題「怎麼確認這兩個排程真的有在跑，不是紙上談兵？」→ `sync-knowledge-base` 已用 `gh workflow run` 手動觸發驗證成功（GitHub Actions log 可查）；`/health` ping 已在 Cron-job.org 後台看到「Last execution: Successful (985 ms)」的實際執行紀錄，不是只有文件寫「應該要做」。
+- 屬於 roadmap Day 9-10（Buffer）任務，跟 Gmail Adapter、Vercel/Render 部署是同批次工作，已於 2026-09-10 完成並驗證。
 
 ## 現況（2026-09-10）
 
 後端已部署至 Render（`https://enterprise-rag-backend-43lh.onrender.com`）。
 
 - `/health` 防休眠 ping：**已上線**，Cron-job.org 排程任務「RAG Assistant Backend Health Ping」每 10 分鐘 GET `/health`，已驗證執行成功。
-- `sync-knowledge-base` 每日 Cron：`.github/workflows/sync-knowledge-base.yml` 已建立，`schedule: cron` 每日觸發，帶 `X-API-Key` 呼叫正式後端。**需要使用者自行在 repo 設定 `SYNC_API_KEY` GitHub Secret**（值對應 Render 環境變數 `SYNC_API_KEY`）才會真正觸發成功；設定前 workflow 會因 401 失敗，會留下可回溯的 Actions log。
+- `sync-knowledge-base` 每日 Cron：`.github/workflows/sync-knowledge-base.yml` 已 merge 進 `master`，`SYNC_API_KEY` GitHub Secret 已設定，並已用 `gh workflow run sync-knowledge-base.yml` 手動觸發驗證成功（job 4 秒完成，回傳 `{"status":"sync_started"}`），每日 UTC 18:00 排程會照此路徑自動執行。
