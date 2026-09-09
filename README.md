@@ -31,6 +31,7 @@ backend/app/
   schemas/         Pydantic request/response
   dependencies/    跨 router 共用依賴（auth.py）
 frontend/          Next.js 14 App Router
+e2e/               Playwright E2E（獨立專案，橫跨 backend+frontend+Supabase）
 supabase/
   migrations/      Schema 與 RLS policy
   tests/           pgTAP（RLS/RBAC 驗證）
@@ -41,7 +42,7 @@ docs/
 
 ## 快速開始
 
-三個子系統（Supabase 本地環境／後端／前端）各自的啟動指令、環境變數位置、測試指令，統一列在 `CLAUDE.md` §8「開發指令」，這裡不重複——避免兩處文件內容漂移。
+三個子系統（Supabase 本地環境／後端／前端）各自的啟動指令、環境變數位置、測試指令，統一列在 `CLAUDE.md` §8「開發指令」，這裡不重複——避免兩處文件內容漂移。也可以用 `docker compose --env-file frontend/.env.local up --build` 一鍵啟動 backend + frontend（前置仍是先 `supabase start`），細節同樣在 `CLAUDE.md` §8。
 
 ## 部署狀態
 
@@ -50,7 +51,7 @@ docs/
 
 外部排程現況（見 `docs/dev_roadmap_v3.1.md` Day 9-10「待實現清單」與 `docs/adr/0008-external-cron-over-in-app-scheduler.md`）：
 - `/health` 防休眠 Ping：已在 Cron-job.org 設定，每 10 分鐘觸發一次，已驗證正常運作。
-- `sync-knowledge-base` 每日 Cron：`.github/workflows/sync-knowledge-base.yml` 已建立，但需要先執行 `gh secret set SYNC_API_KEY`（值需對應 Render 的 `SYNC_API_KEY` 環境變數）才會真正觸發成功。
+- `sync-knowledge-base` 每日 Cron：`.github/workflows/sync-knowledge-base.yml` 已建立並 merge，`SYNC_API_KEY` GitHub Secret 已設定，已用 `gh workflow run` 手動觸發驗證成功。
 
 **Gmail 通知收件人**：`DOCUMENT_PROCESSED`（文件處理完成）動態查上傳者 email 的邏輯已實作（`backend/app/config.py` 的 `use_dynamic_notification_recipient`），但**預設關閉**——個人專案沒有多組測試信箱可以驗證這條路徑，三種通知情境（`DOCUMENT_PROCESSED`／`FLAG_FOR_REVIEW`／`RAG_SYNC_COMPLETED`）目前都固定寄到 `admin_notification_email`（預設值是專案作者本人信箱）。要切換成動態查詢，把 `use_dynamic_notification_recipient` 設 `True`（或設環境變數 `USE_DYNAMIC_NOTIFICATION_RECIPIENT=true`）即可，不需要改程式碼。
 

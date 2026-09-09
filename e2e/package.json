@@ -1,0 +1,14 @@
+{
+  "name": "enterprise-rag-e2e",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@supabase/supabase-js": "^2.115.0",
+    "dotenv": "^16.4.5",
+    "ws": "^8.18.0"
+  }
+}

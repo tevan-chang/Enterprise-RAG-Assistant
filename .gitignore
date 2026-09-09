@@ -25,6 +25,10 @@ Thumbs.db
 # Playwright MCP 開發期瀏覽器測試產出（截圖/snapshot，非專案內容）
 .playwright-mcp/
 
+# Playwright E2E（roadmap Day 10）測試產出，非專案內容
+e2e/test-results/
+e2e/playwright-report/
+
 # Claude Code 個人本機設定（不共用）
 .claude/settings.local.json
 
@@ -33,3 +37,6 @@ docs/dev_roadmap_v3.1.md
 
 # spec 補充版本（含取捨論述與個人背景整理，僅本機參考，不進版控）
 docs/spec_v3.1.local.md
+
+# Demo 劇本（含演練計時紀錄，僅本機參考，不進版控）
+docs/demo_script.md
