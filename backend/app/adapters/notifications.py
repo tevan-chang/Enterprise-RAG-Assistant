@@ -3,6 +3,7 @@ import base64
 from abc import ABC, abstractmethod
 from email.mime.text import MIMEText
 
+from google.auth.exceptions import GoogleAuthError
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -53,6 +54,10 @@ class GmailAPINotificationAdapter(BaseNotificationService):
             self._get_service().users().messages().send(userId="me", body={"raw": raw}).execute()
         except HttpError as exc:
             raise NotificationError(f"Gmail API 寄信失敗: {exc}") from exc
+        except GoogleAuthError as exc:
+            # Credentials.refresh() 在 .execute() 內部觸發，失敗（如 refresh_token 過期/被撤銷）
+            # 丟的是 google.auth.exceptions 的例外，不是 HttpError，兩者都要接住轉成 NotificationError。
+            raise NotificationError(f"Gmail OAuth 憑證驗證失敗: {exc}") from exc
 
     async def send(self, to: str, subject: str, html_content: str) -> None:
         if not (settings.gmail_oauth_client_id and settings.gmail_oauth_client_secret and settings.gmail_oauth_refresh_token):

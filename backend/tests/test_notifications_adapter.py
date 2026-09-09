@@ -69,3 +69,22 @@ async def test_send_wraps_http_error_as_notification_error():
     ):
         with pytest.raises(NotificationError):
             await GmailAPINotificationAdapter().send("admin@example.com", "主旨", "<p>內文</p>")
+
+
+async def test_send_wraps_refresh_error_as_notification_error():
+    """實測發現：refresh_token 過期/被撤銷時，.execute() 內部觸發 Credentials.refresh()
+    丟的是 google.auth.exceptions.RefreshError，不是 HttpError，兩者都要接住（見 Sentry
+    issue RAG-ASSISTANT-B：一開始只接 HttpError 導致這個情境沒被轉成 NotificationError，
+    以 500 洩漏給呼叫端，而不是預期的 502）。"""
+    from google.auth.exceptions import RefreshError
+
+    refresh_error = RefreshError("invalid_grant: Token has been expired or revoked.")
+    mock_service = MagicMock()
+    mock_service.users.return_value.messages.return_value.send.return_value.execute.side_effect = refresh_error
+
+    with (
+        patch(f"{_MODULE}.Credentials"),
+        patch(f"{_MODULE}.build", return_value=mock_service),
+    ):
+        with pytest.raises(NotificationError):
+            await GmailAPINotificationAdapter().send("admin@example.com", "主旨", "<p>內文</p>")
