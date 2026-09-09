@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -8,6 +8,7 @@ from app.services.notifications import (
     FLAG_FOR_REVIEW,
     RAG_SYNC_COMPLETED,
     _build_content,
+    _resolve_uploader_email,
     send_notification,
 )
 
@@ -68,3 +69,87 @@ async def test_send_notification_uses_default_adapter_when_not_injected():
         await send_notification(RAG_SYNC_COMPLETED, {"zombie_marked_failed": 0})
 
     MockAdapter.return_value.send.assert_called_once()
+
+
+async def test_send_notification_ignores_user_id_when_dynamic_recipient_disabled():
+    """旗標預設關閉：即使 context 帶 user_id，收件人仍是 admin_notification_email。"""
+    adapter = AsyncMock()
+
+    await send_notification(
+        DOCUMENT_PROCESSED,
+        {"document_id": "doc-1", "file_name": "q3.pdf", "user_id": "user-1"},
+        adapter=adapter,
+    )
+
+    assert adapter.send.call_args.args[0] == settings.admin_notification_email
+
+
+async def test_send_notification_uses_uploader_email_when_dynamic_recipient_enabled():
+    adapter = AsyncMock()
+
+    with (
+        patch.object(settings, "use_dynamic_notification_recipient", True),
+        patch(f"{_MODULE}._resolve_uploader_email", return_value="uploader@example.com") as mock_resolve,
+    ):
+        await send_notification(
+            DOCUMENT_PROCESSED,
+            {"document_id": "doc-1", "file_name": "q3.pdf", "user_id": "user-1"},
+            adapter=adapter,
+        )
+
+    mock_resolve.assert_called_once_with("user-1")
+    assert adapter.send.call_args.args[0] == "uploader@example.com"
+
+
+async def test_send_notification_falls_back_to_admin_email_when_lookup_fails():
+    adapter = AsyncMock()
+
+    with (
+        patch.object(settings, "use_dynamic_notification_recipient", True),
+        patch(f"{_MODULE}._resolve_uploader_email", return_value=None),
+    ):
+        await send_notification(
+            DOCUMENT_PROCESSED,
+            {"document_id": "doc-1", "file_name": "q3.pdf", "user_id": "user-1"},
+            adapter=adapter,
+        )
+
+    assert adapter.send.call_args.args[0] == settings.admin_notification_email
+
+
+async def test_send_notification_falls_back_to_admin_email_when_no_user_id():
+    adapter = AsyncMock()
+
+    with (
+        patch.object(settings, "use_dynamic_notification_recipient", True),
+        patch(f"{_MODULE}._resolve_uploader_email") as mock_resolve,
+    ):
+        await send_notification(
+            DOCUMENT_PROCESSED,
+            {"document_id": "doc-1", "file_name": "q3.pdf"},
+            adapter=adapter,
+        )
+
+    mock_resolve.assert_not_called()
+    assert adapter.send.call_args.args[0] == settings.admin_notification_email
+
+
+def test_resolve_uploader_email_returns_email_on_success():
+    mock_client = MagicMock()
+    mock_client.auth.admin.get_user_by_id.return_value.user.email = "uploader@example.com"
+
+    with patch(f"{_MODULE}.get_supabase_client", return_value=mock_client):
+        result = _resolve_uploader_email("user-1")
+
+    assert result == "uploader@example.com"
+    mock_client.auth.admin.get_user_by_id.assert_called_once_with("user-1")
+
+
+def test_resolve_uploader_email_returns_none_when_lookup_raises():
+    mock_client = MagicMock()
+    mock_client.auth.admin.get_user_by_id.side_effect = RuntimeError("not found")
+
+    with patch(f"{_MODULE}.get_supabase_client", return_value=mock_client):
+        result = _resolve_uploader_email("user-1")
+
+    assert result is None
