@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.observability import init_sentry
-from app.routers import chat, documents, reports, usage
+from app.routers import admin, chat, documents, reports, usage
 from app.services.zombie_cleanup import cleanup_zombie_tasks
 
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +39,7 @@ app.include_router(documents.router)
 app.include_router(chat.router)
 app.include_router(reports.router)
 app.include_router(usage.router)
+app.include_router(admin.router)
 
 
 @app.get("/health")

@@ -5,6 +5,7 @@ import pytest
 
 from app.config import settings
 from app.services.classification import auto_classify, flag_for_review, on_file_reupload
+from app.services.notifications import send_notification
 
 _MODULE = "app.services.classification"
 
@@ -23,7 +24,7 @@ def test_on_file_reupload_flags_when_hash_changed_and_locked():
         triggered = on_file_reupload("doc-1", b"new content", documents_repo=repo)
 
     assert triggered is True
-    mock_flag.assert_called_once_with("doc-1")
+    mock_flag.assert_called_once_with("doc-1", background_tasks=None)
 
 
 def test_on_file_reupload_does_not_auto_unlock():
@@ -65,6 +66,25 @@ def test_flag_for_review_reports_to_sentry():
 
     mock_sentry.capture_message.assert_called_once()
     assert "doc-1" in mock_sentry.capture_message.call_args.args[0]
+
+
+def test_flag_for_review_without_background_tasks_does_not_dispatch_notification():
+    """呼叫端（例如既有測試）沒有提供 BackgroundTasks 時，只記 log，不寄信。"""
+    with patch(f"{_MODULE}.sentry_sdk"):
+        flag_for_review("doc-1")
+
+
+def test_flag_for_review_dispatches_notification_via_background_tasks():
+    from app.services.notifications import FLAG_FOR_REVIEW
+
+    background_tasks = MagicMock()
+
+    with patch(f"{_MODULE}.sentry_sdk"):
+        flag_for_review("doc-1", background_tasks=background_tasks)
+
+    background_tasks.add_task.assert_called_once_with(
+        send_notification, FLAG_FOR_REVIEW, {"document_id": "doc-1"}
+    )
 
 
 def test_on_file_reupload_raises_when_document_missing():
