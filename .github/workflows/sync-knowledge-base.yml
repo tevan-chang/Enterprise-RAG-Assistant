@@ -1,0 +1,23 @@
+name: Sync Knowledge Base
+
+# 每日觸發 POST /api/v1/admin/sync-knowledge-base（見 docs/adr/0008-external-cron-over-in-app-scheduler.md）。
+# 這支端點目前實質是複用 zombie cleanup（見 docs/adr/0007-...），屬於低頻健檢性質工作，
+# 每日 1 次已足夠，不需要更高頻率。
+#
+# 前置條件：repo 必須先設定 SYNC_API_KEY secret（值對應 Render 環境變數 SYNC_API_KEY）。
+# 設定方式：gh secret set SYNC_API_KEY（於本機終端機互動輸入，不要把金鑰貼進對話或程式碼）。
+
+on:
+  schedule:
+    - cron: "0 18 * * *" # 每日 UTC 18:00（台灣時間 02:00），避開一般使用尖峰時段
+  workflow_dispatch: {} # 允許手動觸發，方便設定 secret 後立即測試
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger sync-knowledge-base
+        run: |
+          curl --fail --silent --show-error \
+            -X POST "https://enterprise-rag-backend-43lh.onrender.com/api/v1/admin/sync-knowledge-base" \
+            -H "X-API-Key: ${{ secrets.SYNC_API_KEY }}"

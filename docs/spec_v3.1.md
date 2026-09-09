@@ -269,7 +269,7 @@ async def on_file_reupload(doc_id: str, new_content: bytes):
 | **POST /api/v1/admin/test-notification** | *(Dev/Admin 健檢)* 測試 Gmail API 憑證連線與 MIME 郵件發送狀態 |
 | GET /health | Render 防休眠 Ping 端點（見 §16.3） |
 
-> ⚠️ **Scope 提醒**：`sync-knowledge-base` 與外部 GitHub Actions Cron 屬於「架構能力展示」而非 §13 兩分鐘 Demo 劇本的必要畫面 —— 建議實作但**不排入現場演示**，視需要另行展示/口述，避免壓縮 Chat/Citation/Report Mode 的打磨時間。
+> ⚠️ **Scope 提醒**：`sync-knowledge-base` 與外部 GitHub Actions Cron 屬於「架構能力展示」而非 §13 兩分鐘 Demo 劇本的必要畫面 —— 建議實作但**不排入現場演示**，視需要另行展示/口述，避免壓縮 Chat/Citation/Report Mode 的打磨時間。觸發頻率定為**每日 1 次**（見 `docs/adr/0008-external-cron-over-in-app-scheduler.md`）；`.github/workflows/sync-knowledge-base.yml` 已建立，尚待設定 `SYNC_API_KEY` GitHub Secret 才會真正觸發成功，見 `docs/dev_roadmap_v3.1.md` Day 9-10「待實現清單」。
 
 ---
 
@@ -464,20 +464,22 @@ RLS/RBAC 矩陣驗證的主要防線，DB 原生層執行，CI 中先於其他�
 
 ### 16.1 前後端分離部署架構
 
-- **前端（Vercel）**：託管 Next.js 14 App Router，享有 Edge Network 靜態快取與 Git Pull Request Preview Deploy
-- **後端（Render）**：FastAPI Docker Web Service，獨立處理 Python 數據分析（pandas）、PDF 解析與 OpenAI API 長連線 SSE 串流
+- **前端（Vercel）**：託管 Next.js 14 App Router，享有 Edge Network 靜態快取與 Git Pull Request Preview Deploy。**已部署**：`https://frontend-ten-virid-56.vercel.app`
+- **後端（Render）**：FastAPI Docker Web Service，獨立處理 Python 數據分析（pandas）、PDF 解析與 OpenAI API 長連線 SSE 串流。**已部署**：`https://enterprise-rag-backend-43lh.onrender.com`（`/health` 已驗證回應 200）
 - **資料庫（Supabase Cloud）**：PostgreSQL + pgvector + Supabase Auth
 
 ### 16.2 CORS 與環境變數規範
 
-- **FastAPI（Render）白名單**：`allow_origins=["https://<your-app>.vercel.app"]`
-- **Vercel 環境變數**：`NEXT_PUBLIC_API_BASE_URL=https://<your-api>.onrender.com`
+- **FastAPI（Render）白名單**：`allow_origins=["https://frontend-ten-virid-56.vercel.app"]`
+- **Vercel 環境變數**：`NEXT_PUBLIC_API_BASE_URL=https://enterprise-rag-backend-43lh.onrender.com`
 
 ### 16.3 Render 免費版防休眠機制（Ping Mechanism）
 
 外部排程服務（Cron-job.org / UptimeRobot）每 10 分鐘自動發送 HTTP GET 至 API `/health` 端點，維持後端容器處於 Hot State，避免 Demo 時遭遇冷啟動延遲。
 
 > ⚠️ **Scope 提醒**：此為維運層面的補丁，不涉及應用內程式邏輯，實作成本極低（一個 `/health` 端點 + 外部服務設定），可直接納入 Day 10 打包流程，不佔用核心開發時間。
+>
+> **現況**：已在 Cron-job.org 設定排程任務（「RAG Assistant Backend Health Ping」），每 10 分鐘 GET `https://enterprise-rag-backend-43lh.onrender.com/health`，已驗證執行成功（985 ms），防休眠 ping **已實際運作**。
 
 ---
 

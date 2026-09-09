@@ -4,6 +4,7 @@ import sentry_sdk
 
 from app.adapters.notifications import BaseNotificationService, GmailAPINotificationAdapter
 from app.config import settings
+from app.db import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -12,11 +13,24 @@ FLAG_FOR_REVIEW = "FLAG_FOR_REVIEW"
 RAG_SYNC_COMPLETED = "RAG_SYNC_COMPLETED"
 
 
+def _resolve_uploader_email(user_id: str) -> str | None:
+    """依 user_id 查 Supabase Auth 使用者 email，供 DOCUMENT_PROCESSED 動態收件人用。
+
+    僅在 settings.use_dynamic_notification_recipient 開啟時才會被呼叫（見 send_notification）。
+    查詢失敗（使用者不存在、Admin API 錯誤等）一律回傳 None，讓呼叫端 fallback 回
+    admin_notification_email，不讓查詢失敗中斷整個通知流程。
+    """
+    try:
+        response = get_supabase_client().auth.admin.get_user_by_id(user_id)
+        return response.user.email
+    except Exception as exc:
+        logger.warning("查詢上傳者 email 失敗，改用預設收件人: user_id=%s err=%s", user_id, exc)
+        return None
+
+
 def _build_content(scenario: str, context: dict) -> tuple[str, str]:
     """三種通知情境各自的 subject/html 樣板（見 spec §2.1）：純函式、不打任何外部服務，
-    方便單獨測試 payload 結構。收件人目前一律固定為 settings.admin_notification_email
-    （見使用者指示），包含 DOCUMENT_PROCESSED——規格書原意是通知上傳者本人，MVP 階段
-    刻意先不建「依上傳者查 email」的查詢鏈路，之後才做動態收件人解析。
+    方便單獨測試 payload 結構。收件人解析在 send_notification 決定，不在這裡。
     """
     if scenario == DOCUMENT_PROCESSED:
         file_name = context.get("file_name", "")
@@ -60,9 +74,14 @@ async def send_notification(
     """
     try:
         subject, html = _build_content(scenario, context)
-        await (adapter or GmailAPINotificationAdapter()).send(
-            settings.admin_notification_email, subject, html
-        )
+
+        recipient = settings.admin_notification_email
+        if settings.use_dynamic_notification_recipient and scenario == DOCUMENT_PROCESSED:
+            user_id = context.get("user_id")
+            if user_id:
+                recipient = _resolve_uploader_email(user_id) or recipient
+
+        await (adapter or GmailAPINotificationAdapter()).send(recipient, subject, html)
     except Exception as exc:
         logger.error("Gmail 通知寄送失敗: scenario=%s err=%s", scenario, exc)
         sentry_sdk.capture_exception(exc)

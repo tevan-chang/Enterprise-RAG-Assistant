@@ -2,7 +2,7 @@
 
 ## Context
 
-Day 9-10 Buffer 新增 `POST /api/v1/admin/sync-knowledge-base`（供外部 GitHub Actions Cron 觸發增量同步）與 `POST /api/v1/admin/test-notification`（Dev/Admin 健檢，測試 Gmail 憑證連線）。這兩個端點都掛在 `routers/admin.py`，但呼叫方性質完全不同：前者是沒有使用者 session 的外部排程服務，後者是已登入的 Admin 從前端/Swagger 手動觸發。`dependencies/auth.py` 目前只有 `get_current_user`/`require_role` 這一種基於 Supabase JWT 的驗證機制，全 repo 沒有任何 API-Key 風格的驗證依賴可以直接套用在 sync 端點上。
+Day 9-10 Buffer 新增 `POST /api/v1/admin/sync-knowledge-base`（供外部 GitHub Actions Cron 觸發增量同步，觸發方式為何是外部 Cron 而非應用內 Scheduler，見 0008-external-cron-over-in-app-scheduler.md）與 `POST /api/v1/admin/test-notification`（Dev/Admin 健檢，測試 Gmail 憑證連線）。這兩個端點都掛在 `routers/admin.py`，但呼叫方性質完全不同：前者是沒有使用者 session 的外部排程服務，後者是已登入的 Admin 從前端/Swagger 手動觸發。`dependencies/auth.py` 目前只有 `get_current_user`/`require_role` 這一種基於 Supabase JWT 的驗證機制，全 repo 沒有任何 API-Key 風格的驗證依賴可以直接套用在 sync 端點上。
 
 另外，`sync-knowledge-base` 的「增量同步」實際要做什麼並不是一個現成問題——規格書 §5 本身把這支端點標註為「架構能力展示」而非核心 Demo 路徑，且系統目前完全沒有外部資料源連接器（文件一律由使用者手動上傳，沒有 Google Drive/S3/任何第三方知識庫可以「同步」）。如果照字面意思做「重新掃描外部來源」，等於要無中生有發明一個假的資料源與掃描邏輯，純粹是為了讓這支端點「看起來有事做」。
 

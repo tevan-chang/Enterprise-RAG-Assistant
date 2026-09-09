@@ -38,9 +38,15 @@ class Settings(BaseSettings):
     # 供外部 GitHub Actions Cron 打 /api/v1/admin/sync-knowledge-base 用的 API Key（見 spec §5）。
     sync_api_key: str = ""
 
-    # Demo 階段三種通知情境（DOCUMENT_PROCESSED/FLAG_FOR_REVIEW/RAG_SYNC_COMPLETED）一律固定
-    # 寄到這個信箱，不做「依上傳者/租戶動態決定收件人」的正式版（見使用者指示，之後再改）。
+    # Demo 階段三種通知情境（DOCUMENT_PROCESSED/FLAG_FOR_REVIEW/RAG_SYNC_COMPLETED）預設一律
+    # 固定寄到這個信箱；DOCUMENT_PROCESSED 可透過 use_dynamic_notification_recipient 切換為
+    # 動態查上傳者 email，此欄位屆時作為查詢失敗時的 fallback。
     admin_notification_email: str = "tevan090726@gmail.com"
+
+    # 是否對 DOCUMENT_PROCESSED 情境動態查上傳者 email（見 services/notifications.py
+    # _resolve_uploader_email）。預設關閉：個人專案沒有多組測試信箱可驗證這條路徑，
+    # 邏輯已實作完整、可測試，之後要開只需改這個設定值，不用動程式碼。
+    use_dynamic_notification_recipient: bool = False
 
     @property
     def allowed_origins_list(self) -> list[str]:
