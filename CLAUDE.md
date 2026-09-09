@@ -166,7 +166,26 @@ npm run build    # 正式建置
 - 設定讀取來自 `frontend/.env.local`（`NEXT_PUBLIC_API_BASE_URL`、`NEXT_PUBLIC_SUPABASE_URL`、`NEXT_PUBLIC_SUPABASE_ANON_KEY`，見 `lib/api.ts` / `lib/supabase/client.ts`）。
 - 登入走 `app/login/page.tsx`（Supabase Auth email/password + Shadcn Form），`middleware.ts` 用 `@supabase/ssr` 的 `createServerClient` 檢查 session，未登入一律導向 `/login`。`lib/auth-context.tsx` 的 `AuthProvider`/`useAuth()` 取代舊的 `dev-identity.tsx`，暴露 `session`/`user`/`tenantId`/`role`（後兩者從 JWT `app_metadata` 解出，純 UX 遮罩用）；`lib/api.ts` 的 `request()` 一律帶 `Authorization: Bearer <session.access_token>` 打後端，不再用 `X-Tenant-Id`/`X-User-Role` header（見 roadmap Day 7.5）。
 
-**Docker Compose**：尚未實作。`docker-compose.yml` 是 skeleton，兩個 service 都用 `profiles: ["not-yet-implemented"]` 佔位，實際定義排在 roadmap Day 10。
+**Docker Compose**（本地開發用，正式環境仍走 Vercel/Render）：
+
+```bash
+docker compose --env-file frontend/.env.local up --build   # 一鍵啟動 backend(:8000) + frontend(:3000)
+```
+
+- 前置：本機 Supabase 需先 `supabase start`；`--env-file frontend/.env.local` 只是給 compose 檔內 `${NEXT_PUBLIC_*}` build args 變數替換用，不要改用根目錄 `.env`（那份放 Supabase Cloud/Gmail 正式憑證）。
+- backend/frontend container 內部一律用 `host.docker.internal` 連回 host 上的本機 Supabase（見 `docker-compose.yml` 註解），瀏覽器端則直接用 `localhost:54321`；`middleware.ts` 因此多讀一個非 `NEXT_PUBLIC_` 的 `SUPABASE_URL_INTERNAL` 環境變數專供 container 內 server 端驗證 session 用，本機裸跑（`npm run dev`）不用設定，會自動 fallback 回 `NEXT_PUBLIC_SUPABASE_URL`。
+- `frontend/lib/supabase/client.ts` 匯出的 `SUPABASE_AUTH_COOKIE_NAME` 常數同時被 `middleware.ts` 引用，確保瀏覽器端與 container 內 server 端各自連不同 Supabase URL 時，算出來的 auth cookie 名稱仍一致（`@supabase/ssr` 預設用 URL host 推導 cookie 名稱，兩邊 host 不同會導致 cookie 對不上、session 一律判定不存在）。
+
+**E2E（Playwright，見 roadmap Day 10）**：獨立的 `e2e/` 專案（不掛在 frontend/ 底下，因為測試橫跨 backend + frontend + Supabase）。
+
+```bash
+cd e2e
+npm install
+npx playwright test   # 前置：本機 Supabase + backend + frontend 三者需先跑起來（docker compose 或各自 npm run dev / uvicorn --reload 皆可）
+```
+
+- `global-setup.ts` 用 `backend/.env` 的 `SUPABASE_SERVICE_ROLE_KEY` 透過 Admin API upsert 一個測試租戶使用者（`app_metadata.tenant_id`/`role`），並清掉該租戶先前留下的文件避免重跑撞 content-hash 409。
+- 唯一一條 Happy Path（`tests/upload-happy-path.spec.ts`）：登入 → 上傳 `docs/test_document.pdf` → Polling 轉 `completed` → 出現「AI 自動標籤」badge。Chat/Report/Gmail 一律不進這裡（見 CLAUDE.md Guardrail #7），改由 `backend/tests/` 的 Pytest 合約測試覆蓋。
 
 ---
 
