@@ -25,6 +25,10 @@ Thumbs.db
 # Playwright MCP 開發期瀏覽器測試產出（截圖/snapshot，非專案內容）
 .playwright-mcp/
 
+# Playwright E2E（roadmap Day 10）測試產出，非專案內容
+e2e/test-results/
+e2e/playwright-report/
+
 # Claude Code 個人本機設定（不共用）
 .claude/settings.local.json
 
