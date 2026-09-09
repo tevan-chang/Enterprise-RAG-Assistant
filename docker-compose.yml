@@ -1,12 +1,55 @@
-# Skeleton only — Day 10 補實際 service 定義（見 docs/dev_roadmap_v3.1.md）
-# 本地開發用；正式環境走 Vercel（前端）/ Render（後端），見 docs/spec_v3.1.md §16
-version: "3.9"
-
+# 本地開發用：一鍵啟動指令如下（見 README 對應章節）：
+#
+#   docker compose --env-file frontend/.env.local up --build
+#
+# `--env-file frontend/.env.local` 是給 compose 檔內 `${NEXT_PUBLIC_*}` 變數替換用
+# （build args 只能在 compose 解析階段從 shell env / 指定的 env file 取值，不能像
+# `environment:`/`env_file:` 那樣在 container 執行期讀），刻意不用 repo 根目錄的 `.env`
+# ——那份放的是 Supabase Cloud/Gmail 正式環境憑證（見 CLAUDE.md §8），跟本地開發用的
+# NEXT_PUBLIC_* 值意義不同，混在一起容易誤植正式憑證。
+#
+# 前置：本機 Supabase 需先用 `supabase start` 啟動（見 CLAUDE.md §8），本檔不把 Supabase
+# 折進 docker-compose ——它本身就是 Supabase CLI 另外管理的獨立 docker-compose 專案，
+# 兩者混在一起徒增複雜度，也不是 spec §16 的設計意圖。backend/frontend 用
+# `host.docker.internal` 連回 host 上跑的本機 Supabase（見 supabase/config.toml 的
+# api 埠 54321）。
+#
+# 環境變數：backend 讀 backend/.env（見 CLAUDE.md §8，這份本機開發設定檔應該已經
+# 存在；沒有的話別複製根目錄 .env.example 的值進去——那份是 Render 正式環境用的
+# key 清單，值要填本機 Supabase/OpenAI 憑證，不是正式環境憑證）。frontend build 期間
+# 讀 frontend/.env.local（NEXT_PUBLIC_* 會被烤進前端 bundle，見 frontend/Dockerfile；
+# 沒有的話比照 frontend/.env.local.example 建立，填本機 Supabase 的值）。
 services:
   backend:
     build: ./backend
-    profiles: ["not-yet-implemented"]
+    env_file:
+      - ./backend/.env
+    environment:
+      # 只覆蓋 SUPABASE_URL：.env 裡給本機裸跑用的 127.0.0.1，container 內連不到 host，
+      # 一律改連 host.docker.internal（Docker Desktop 內建的 host 對應名稱）。
+      # ALLOWED_ORIGINS 不在這裡覆蓋——backend/.env 裡的值已經同時涵蓋
+      # localhost:3000/127.0.0.1:3000，這裡若重複設定反而會不小心窄化成單一 origin。
+      SUPABASE_URL: http://host.docker.internal:54321
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   frontend:
-    build: ./frontend
-    profiles: ["not-yet-implemented"]
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+        NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+    environment:
+      # middleware.ts 在 frontend container 內部驗證 session，同樣連不到 host 的
+      # localhost:54321，用這個內部專用網址覆蓋（見 middleware.ts 的 fallback 邏輯）。
+      SUPABASE_URL_INTERNAL: http://host.docker.internal:54321
+    ports:
+      - "3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - backend
