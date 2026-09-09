@@ -9,6 +9,7 @@ from app.repositories.documents_repository import DocumentsRepository
 from app.services.classification import auto_classify
 from app.services.chunker import Chunk, chunk_pages, chunk_plain_text, chunk_xlsx_sheets
 from app.services.embeddings import EmbeddingError, embed_texts
+from app.services.notifications import DOCUMENT_PROCESSED, send_notification
 from app.services.pdf_parser import PageText, PDFParsingError, extract_pdf_pages
 from app.services.xlsx_parser import XLSXParsingError, extract_xlsx_sheets, sheets_to_json
 
@@ -48,6 +49,11 @@ async def _embed_and_store_chunks(
 
     chunks_repo.bulk_insert(document_id, tenant_id, chunks)
     documents_repo.update_status(document_id, "completed")
+
+    # 這裡不需要再包一層 BackgroundTasks——本函式已經是在 process_pdf_document/
+    # process_xlsx_document 這個由 router 的 background_tasks.add_task(pipeline, ...)
+    # 派發的背景任務內執行，已滿足「非同步派發、不阻塞主回應」的要求（見 spec §2.1）。
+    await send_notification(DOCUMENT_PROCESSED, {"document_id": document_id, "file_name": file_name})
 
     await auto_classify(
         document_id=document_id,

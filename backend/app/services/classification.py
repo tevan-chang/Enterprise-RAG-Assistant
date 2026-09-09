@@ -4,10 +4,12 @@ import logging
 from functools import lru_cache
 
 import sentry_sdk
+from fastapi import BackgroundTasks
 from openai import AsyncOpenAI
 
 from app.config import settings
 from app.repositories.documents_repository import DocumentsRepository
+from app.services.notifications import FLAG_FOR_REVIEW, send_notification
 from app.services.token_usage import record_usage
 
 logger = logging.getLogger(__name__)
@@ -72,20 +74,25 @@ async def auto_classify(
     repo.apply_auto_classification(document_id, categories, tenant_id)
 
 
-def flag_for_review(document_id: str) -> None:
+def flag_for_review(document_id: str, background_tasks: BackgroundTasks | None = None) -> None:
     """已鎖定文件內容變更時觸發，警報通知 Admin（見 spec §4.3 / §2.1 情境 2）。
 
-    TODO(Day 9-10): 改接 GmailAPINotificationAdapter 的 FLAG_FOR_REVIEW 情境，
-    目前先用 log + Sentry 佔位（同 app/services/zombie_cleanup.py 的作法）。
+    log + Sentry 記錄一律保留（同 app/services/zombie_cleanup.py 的作法，方便維運追蹤），
+    另外經 BackgroundTasks 非同步派發 Gmail 通知，不阻塞呼叫端（reupload API）的回應時間。
+    `background_tasks` 為 None 時（例如既有測試直接呼叫本函式）僅記 log，不寄信，
+    避免呼叫端一定要提供 BackgroundTasks 才能用這個函式。
     """
     logger.warning("文件內容變更但分類已鎖定，標記待審查（flag_for_review）: doc_id=%s", document_id)
     sentry_sdk.capture_message(f"flag_for_review 觸發：文件內容變更但分類已鎖定 doc_id={document_id}", level="warning")
+    if background_tasks is not None:
+        background_tasks.add_task(send_notification, FLAG_FOR_REVIEW, {"document_id": document_id})
 
 
 def on_file_reupload(
     document_id: str,
     new_content: bytes,
     documents_repo: DocumentsRepository | None = None,
+    background_tasks: BackgroundTasks | None = None,
 ) -> bool:
     """見 spec §4.3：hash 變更且原狀態為 manually_verified → flag_for_review，
     不自動解鎖（classification_status 維持 manually_verified，交由 Admin 判斷）。
@@ -99,6 +106,6 @@ def on_file_reupload(
 
     new_hash = hashlib.sha256(new_content).hexdigest()
     if doc["file_content_hash"] != new_hash and doc["classification_status"] == "manually_verified":
-        flag_for_review(document_id)
+        flag_for_review(document_id, background_tasks=background_tasks)
         return True
     return False

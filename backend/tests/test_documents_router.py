@@ -1,5 +1,5 @@
 import hashlib
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from fastapi import BackgroundTasks, FastAPI
@@ -286,7 +286,9 @@ def test_reupload_as_editor_or_admin_succeeds():
 
         assert resp.status_code == 200, f"role={role} 應允許 reupload"
         assert resp.json() == {"document_id": "doc-1", "processing_status": "parsing"}
-        mock_on_reupload.assert_called_once_with("doc-1", b"new content", documents_repo=repo)
+        mock_on_reupload.assert_called_once_with(
+            "doc-1", b"new content", documents_repo=repo, background_tasks=ANY
+        )
         repo.update_for_reupload.assert_called_once()
         args, kwargs = repo.update_for_reupload.call_args
         assert args[0] == "doc-1"
@@ -382,7 +384,7 @@ def test_reupload_flags_for_review_when_locked_and_hash_changed():
         )
 
     assert resp.status_code == 200
-    mock_flag.assert_called_once_with("doc-1")
+    mock_flag.assert_called_once_with("doc-1", background_tasks=ANY)
     repo.reorganize.assert_not_called()
 
 

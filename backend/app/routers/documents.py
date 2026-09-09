@@ -128,7 +128,7 @@ async def reupload_document(
         raise HTTPException(status_code=404, detail="文件不存在")
 
     file_bytes = await file.read()
-    on_file_reupload(document_id, file_bytes, documents_repo=documents_repo)
+    on_file_reupload(document_id, file_bytes, documents_repo=documents_repo, background_tasks=background_tasks)
 
     new_hash = hashlib.sha256(file_bytes).hexdigest()
     documents_repo.update_for_reupload(document_id, new_hash, "parsing")
