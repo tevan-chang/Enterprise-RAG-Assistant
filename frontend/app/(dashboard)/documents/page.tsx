@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
+  ChevronDown,
   FileSpreadsheet,
   FileStack,
   FileText,
@@ -24,6 +25,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -146,13 +156,22 @@ function DocumentRow({ doc }: { doc: DocumentListItem }) {
   const { session, role } = useAuth();
   const accessToken = session!.access_token;
   const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
   const [categoriesInput, setCategoriesInput] = useState(doc.final_categories.join(", "));
   const [departmentsInput, setDepartmentsInput] = useState(doc.departments.join(", "));
   const [confidentiality, setConfidentiality] = useState<Confidentiality>(
     (doc.confidentiality as Confidentiality) ?? "internal",
   );
+  const [categoriesError, setCategoriesError] = useState<string | null>(null);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["documents"] });
+
+  const resetDraft = () => {
+    setCategoriesInput(doc.final_categories.join(", "));
+    setDepartmentsInput(doc.departments.join(", "));
+    setConfidentiality((doc.confidentiality as Confidentiality) ?? "internal");
+    setCategoriesError(null);
+  };
 
   const reorganizeMutation = useMutation({
     mutationFn: () => {
@@ -169,8 +188,28 @@ function DocumentRow({ doc }: { doc: DocumentListItem }) {
         confidentiality,
       });
     },
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      setOpen(false);
+    },
   });
+
+  const handleReorganize = () => {
+    const hasCategory = categoriesInput.split(",").some((c) => c.trim().length > 0);
+    if (!hasCategory) {
+      setCategoriesError("請先輸入至少一個分類標籤，才能整理此文件");
+      return;
+    }
+    setCategoriesError(null);
+    reorganizeMutation.mutate();
+  };
+
+  const handleCancel = () => {
+    resetDraft();
+    setOpen(false);
+  };
+
+  const categorySummary = [...doc.final_categories, ...doc.departments].join(" / ");
 
   const unlockMutation = useMutation({
     mutationFn: () => unlockDocuments([doc.document_id], accessToken),
@@ -187,66 +226,108 @@ function DocumentRow({ doc }: { doc: DocumentListItem }) {
   const canDelete = EDITOR_ROLES.has(role ?? "");
 
   return (
-    <tr className="border-b">
-      <td className="p-2 align-top">
+    <TableRow>
+      <TableCell className="whitespace-normal py-3 align-top">
         <div className="flex items-center gap-2">
           <FileTypeIcon fileName={doc.file_name} />
           <span className="truncate">{doc.file_name}</span>
         </div>
-      </td>
-      <td className="p-2 align-top">
+      </TableCell>
+      <TableCell className="py-3 align-top">
         <Badge className={STATUS_BADGE_CLASS[doc.processing_status]}>
           {PROCESSING_STATUS_LABEL[doc.processing_status] ?? doc.processing_status}
         </Badge>
-      </td>
-      <td className="p-2 align-top">
+      </TableCell>
+      <TableCell className="whitespace-normal py-3 align-top">
         <div className="flex flex-col items-start gap-1">
           <ClassificationBadge status={doc.classification_status} />
           <ConfidentialityBadge confidentiality={doc.confidentiality} />
         </div>
-      </td>
-      <td className="p-2 align-top">
+      </TableCell>
+      <TableCell className="whitespace-normal py-3 align-top">
         {canReorganize ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              value={categoriesInput}
-              onChange={(e) => setCategoriesInput(e.target.value)}
-              placeholder="分類（逗號分隔）"
-              className="h-7 w-36 text-xs"
+          <Popover
+            open={open}
+            onOpenChange={(next) => {
+              if (next) resetDraft();
+              setOpen(next);
+            }}
+          >
+            <PopoverTrigger
+              render={
+                <Button
+                  variant="outline"
+                  size="xs"
+                  className="max-w-full justify-between gap-1"
+                  title={categorySummary || undefined}
+                >
+                  <span className="truncate">{categorySummary || "尚未設定，點擊分類"}</span>
+                  <ChevronDown className="size-3 shrink-0" />
+                </Button>
+              }
             />
-            <Input
-              value={departmentsInput}
-              onChange={(e) => setDepartmentsInput(e.target.value)}
-              placeholder="部門（逗號分隔）"
-              className="h-7 w-36 text-xs"
-            />
-            <Select
-              value={confidentiality}
-              onValueChange={(value) => setConfidentiality(value as Confidentiality)}
-            >
-              <SelectTrigger size="sm" className="h-7 text-xs">
-                <SelectValue placeholder="機密等級" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="public">公開</SelectItem>
-                <SelectItem value="internal">內部</SelectItem>
-                <SelectItem value="restricted">機密</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => reorganizeMutation.mutate()}
-              disabled={reorganizeMutation.isPending}
-            >
-              整理
-            </Button>
-          </div>
+            <PopoverContent>
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">標籤</span>
+                  <Input
+                    value={categoriesInput}
+                    onChange={(e) => {
+                      setCategoriesInput(e.target.value);
+                      if (categoriesError) setCategoriesError(null);
+                    }}
+                    placeholder="分類（逗號分隔）"
+                    className="h-8 text-xs"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">部門</span>
+                  <Input
+                    value={departmentsInput}
+                    onChange={(e) => setDepartmentsInput(e.target.value)}
+                    placeholder="部門（逗號分隔）"
+                    className="h-8 text-xs"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">權限</span>
+                  <Select
+                    value={confidentiality}
+                    onValueChange={(value) => setConfidentiality(value as Confidentiality)}
+                  >
+                    <SelectTrigger size="sm" className="w-full text-xs">
+                      <SelectValue placeholder="機密等級" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="public">公開</SelectItem>
+                      <SelectItem value="internal">內部</SelectItem>
+                      <SelectItem value="restricted">機密</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {categoriesError && (
+                  <span className="text-xs text-red-600">{categoriesError}</span>
+                )}
+                <div className="flex justify-end gap-2 pt-1">
+                  <Button size="xs" variant="outline" onClick={handleCancel}>
+                    取消
+                  </Button>
+                  <Button
+                    size="xs"
+                    onClick={handleReorganize}
+                    disabled={reorganizeMutation.isPending}
+                  >
+                    儲存並整理
+                  </Button>
+                </div>
+              </div>
+            </PopoverContent>
+          </Popover>
         ) : (
           doc.final_categories.join(", ") || "—"
         )}
-      </td>
-      <td className="p-2 align-top">
+      </TableCell>
+      <TableCell className="py-3 align-top">
         <div className="flex items-center gap-2">
           {canUnlock && (
             <Button
@@ -295,8 +376,8 @@ function DocumentRow({ doc }: { doc: DocumentListItem }) {
             </AlertDialog>
           )}
         </div>
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -319,11 +400,11 @@ export default function DocumentsPage() {
   );
 
   if (isLoading || !session) {
-    return <main className="mx-auto max-w-4xl p-6 text-sm text-muted-foreground">載入中...</main>;
+    return <main className="mx-auto max-w-6xl p-6 text-sm text-muted-foreground">載入中...</main>;
   }
 
   return (
-    <main className="mx-auto flex max-w-4xl flex-col gap-6 p-6">
+    <main className="mx-auto flex max-w-6xl flex-col gap-6 p-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">文件列表</h1>
         <Button size="sm" onClick={openUploadModal}>
@@ -373,22 +454,29 @@ export default function DocumentsPage() {
           {filteredDocuments.length === 0 ? (
             <p className="text-sm text-muted-foreground">沒有符合篩選條件的文件。</p>
           ) : (
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr className="border-b text-left text-muted-foreground">
-                  <th className="p-2 font-medium">檔案名稱</th>
-                  <th className="p-2 font-medium">處理狀態</th>
-                  <th className="p-2 font-medium">分類狀態</th>
-                  <th className="p-2 font-medium">分類</th>
-                  <th className="p-2 font-medium">Admin 操作</th>
-                </tr>
-              </thead>
-              <tbody>
+            <Table>
+              <colgroup>
+                <col style={{ width: "26%" }} />
+                <col style={{ width: "12%" }} />
+                <col style={{ width: "20%" }} />
+                <col style={{ width: "22%" }} />
+                <col style={{ width: "20%" }} />
+              </colgroup>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>檔案名稱</TableHead>
+                  <TableHead>處理狀態</TableHead>
+                  <TableHead>分類狀態</TableHead>
+                  <TableHead>分類</TableHead>
+                  <TableHead>Admin 操作</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {filteredDocuments.map((doc) => (
                   <DocumentRow key={doc.document_id} doc={doc} />
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           )}
         </>
       )}
