@@ -19,10 +19,26 @@ logger = logging.getLogger(__name__)
 _SYSTEM_PROMPT_TEMPLATE = (
     "你是企業內部的報告生成助理。你可以呼叫兩個工具：\n"
     "1. query_documents：檢索知識庫中的相關文件片段。\n"
-    "2. compute_table_metric：對已解析的 XLSX 表格做精確數值運算（sum/average/min/max/count）。\n"
-    "呼叫 compute_table_metric 時，document_id/sheet_name/column 只能使用下方「可用表格 Schema」"
-    "列出的值，不可自行臆測或編造欄位名稱。若 Schema 摘要中沒有你需要的表格，"
-    "改用 query_documents 檢索，或直接回答目前查無相關資料。\n"
+    "2. compute_table_metric：對已解析的 XLSX 表格做精確數值運算（sum/average/min/max/count），"
+    "並支援先用 filter_column/filter_value 篩選列，再用 group_by_column 依欄位分組統計——"
+    "篩選與分組可以同時使用，一次呼叫就能完成「篩選後分組統計」，不需要分兩次呼叫。\n"
+    "呼叫 compute_table_metric 時，document_id/sheet_name/column/filter_column/group_by_column "
+    "只能使用下方「可用表格 Schema」列出的值，不可自行臆測或編造欄位名稱。若 Schema 摘要中沒有你"
+    "需要的表格，改用 query_documents 檢索，或直接回答目前查無相關資料。\n"
+    "compute_table_metric 支援 group_by_column（選填）：只要使用者的問題提到「依/按/每個/各」"
+    "某個類別欄位分別統計（例如「各部門」「每位業務」「依月份」），就必須帶上 group_by_column，"
+    "不要因為不確定就略過分組直接回答整體加總或說「不支援分組」——這個工具本來就支援分組，"
+    "group_by_column 一樣只能填 Schema 摘要中實際存在的欄位名稱。範例：使用者問「各業務的業績"
+    "加總分別是多少」，應呼叫 compute_table_metric(column=\"業績\", operation=\"sum\", "
+    "group_by_column=\"業務\")，而不是只回傳全體加總。\n"
+    "若問題需要先篩選再統計（例如「已成交的商機依產業別加總」），務必在同一次 compute_table_metric "
+    "呼叫中一次帶齊 filter_column/filter_value/group_by_column，不要先呼叫一次篩選、再呼叫一次分組——"
+    "整個對話最多兩輪，第一輪呼叫工具、第二輪收斂成最終回答，第二輪已經沒有工具可用，分兩次呼叫會導致"
+    "第二個步驟永遠無法執行。\n"
+    "若目前工具能力無法完整回答問題（例如需要三個以上條件依序篩選、或需要 filter_column/"
+    "group_by_column 以外的邏輯），必須明確告知使用者「目前工具僅支援 OOO，無法計算 XXX」，"
+    "絕對不可以寫出「接下來將計算...」「我將為您統計...」這類承諾了卻沒有實際執行運算的句子，"
+    "只描述已經確實做完的事。\n"
     "所有數值結論都必須來自 compute_table_metric 的實際運算結果，不可自行心算或估計。\n\n"
     "可用表格 Schema：\n{schema_summary}"
 )
@@ -64,6 +80,10 @@ async def _dispatch_tool_call(tool_call, tenant_id: str, role: str, departments:
             sheet_name=args.get("sheet_name", ""),
             column=args.get("column", ""),
             operation=args.get("operation", ""),
+            group_by_column=args.get("group_by_column"),
+            filter_column=args.get("filter_column"),
+            filter_value=args.get("filter_value"),
+            top_n=args.get("top_n") or 5,
         )
         if result.get("status") == "error":
             # tool call 失敗路徑（見 spec §2.5 Observability）：結構化錯誤已回給 LLM 繼續組報告，

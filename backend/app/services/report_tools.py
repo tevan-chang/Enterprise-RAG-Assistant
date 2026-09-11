@@ -34,8 +34,11 @@ TOOL_DEFINITIONS = [
             "name": "compute_table_metric",
             "description": (
                 "對已解析的 XLSX 表格做精確數值運算（sum/average/min/max/count）。"
-                "document_id / sheet_name / column 必須從對話中提供的 Schema 摘要挑選，"
-                "不可自行臆測欄位名稱或表格內容。"
+                "可選填 filter_column/filter_value 先篩選列（兩者需成對出現），"
+                "再選填 group_by_column 依欄位分組統計——篩選與分組可以同時使用，"
+                "一次呼叫完成「篩選後分組統計」，不需要分兩次呼叫。"
+                "document_id / sheet_name / column / filter_column / group_by_column "
+                "必須從對話中提供的 Schema 摘要挑選，不可自行臆測欄位名稱或表格內容。"
             ),
             "parameters": {
                 "type": "object",
@@ -44,6 +47,24 @@ TOOL_DEFINITIONS = [
                     "sheet_name": {"type": "string", "description": "Schema 摘要中的 sheet_name"},
                     "column": {"type": "string", "description": "Schema 摘要中的欄位名稱"},
                     "operation": {"type": "string", "enum": sorted(_SUPPORTED_OPERATIONS)},
+                    "filter_column": {
+                        "type": "string",
+                        "description": "選填，先依此欄位篩選列，需與 filter_value 成對提供",
+                    },
+                    "filter_value": {
+                        "type": "string",
+                        "description": "選填，filter_column 要比對的值，需與 filter_column 成對提供",
+                    },
+                    "group_by_column": {
+                        "type": "string",
+                        "description": "選填，依此欄位分組後再運算，僅 sum/average/count 支援分組",
+                    },
+                    "top_n": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "選填，分組結果只回傳前 N 名，預設 5",
+                    },
                 },
                 "required": ["document_id", "sheet_name", "column", "operation"],
             },
@@ -91,6 +112,10 @@ def _run_pandas_operation(
     column: str,
     operation: str,
     documents_repo: DocumentsRepository,
+    group_by_column: str | None = None,
+    filter_column: str | None = None,
+    filter_value: str | None = None,
+    top_n: int = 5,
 ):
     if operation not in _SUPPORTED_OPERATIONS:
         raise TypeError(f"不支援的運算方式：{operation}（僅支援 {sorted(_SUPPORTED_OPERATIONS)}）")
@@ -108,21 +133,56 @@ def _run_pandas_operation(
     if column not in df.columns:
         raise ColumnNotFoundError(f"工作表「{sheet_name}」找不到欄位：{column}")
 
-    series = df[column]
+    applied_filter = None
+    if filter_column is not None:
+        if filter_column not in df.columns:
+            raise ColumnNotFoundError(f"工作表「{sheet_name}」找不到篩選欄位：{filter_column}")
+        df = df[df[filter_column].astype(str) == str(filter_value)]
+        applied_filter = {"column": filter_column, "value": filter_value}
+
+    if group_by_column is not None and group_by_column not in df.columns:
+        raise ColumnNotFoundError(f"工作表「{sheet_name}」找不到分組欄位：{group_by_column}")
+
+    if group_by_column is None:
+        series = df[column]
+        if operation == "count":
+            return int(series.count())
+
+        numeric = pd.to_numeric(series, errors="coerce")
+        if numeric.notna().sum() == 0:
+            raise TypeError(f"欄位「{column}」無法轉換為數值，無法執行 {operation} 運算")
+
+        if operation == "sum":
+            return float(numeric.sum())
+        if operation == "average":
+            return float(numeric.mean())
+        if operation == "min":
+            return float(numeric.min())
+        return float(numeric.max())
+
+    if operation not in {"sum", "average", "count"}:
+        raise TypeError(f"分組統計（group_by_column）僅支援 sum/average/count，不支援 {operation}")
+
     if operation == "count":
-        return int(series.count())
+        aggregated = df.groupby(group_by_column)[column].count()
+    else:
+        numeric = pd.to_numeric(df[column], errors="coerce")
+        if numeric.notna().sum() == 0:
+            raise TypeError(f"欄位「{column}」無法轉換為數值，無法執行 {operation} 運算")
+        grouped = numeric.groupby(df[group_by_column])
+        aggregated = grouped.sum() if operation == "sum" else grouped.mean()
 
-    numeric = pd.to_numeric(series, errors="coerce")
-    if numeric.notna().sum() == 0:
-        raise TypeError(f"欄位「{column}」無法轉換為數值，無法執行 {operation} 運算")
-
-    if operation == "sum":
-        return float(numeric.sum())
-    if operation == "average":
-        return float(numeric.mean())
-    if operation == "min":
-        return float(numeric.min())
-    return float(numeric.max())
+    aggregated = aggregated.sort_values(ascending=False)
+    total = aggregated.sum()
+    groups = [
+        {
+            "group": str(key),
+            "value": int(value) if operation == "count" else float(value),
+            "share": round(float(value) / total, 4) if total else 0.0,
+        }
+        for key, value in aggregated.head(top_n).items()
+    ]
+    return {"groups": groups, "filter": applied_filter}
 
 
 async def compute_table_metric(
@@ -132,15 +192,33 @@ async def compute_table_metric(
     sheet_name: str,
     column: str,
     operation: str,
+    group_by_column: str | None = None,
+    filter_column: str | None = None,
+    filter_value: str | None = None,
+    top_n: int = 5,
     documents_repo: DocumentsRepository | None = None,
 ) -> dict:
     """`compute_table_metric` tool 實作（見 spec §2.4 錯誤處理範例）：
     結構化 try/except，讓 tool-calling 失敗路徑也能回傳可讀訊息給 LLM 組報告，
-    而不是讓整個 Report Mode 請求整條掛掉。
+    而不是讓整個 Report Mode 請求整條掛掉。`filter_column`/`filter_value` 選填，
+    先篩選列再運算；`group_by_column` 選填，分組時 `result` 會是
+    `{"groups": [{"group", "value", "share"}, ...], "filter": ...}`，
+    不分組時仍是原本的單一純量。
     """
     documents_repo = documents_repo or DocumentsRepository()
     try:
-        result = _run_pandas_operation(tenant_id, document_id, sheet_name, column, operation, documents_repo)
+        result = _run_pandas_operation(
+            tenant_id,
+            document_id,
+            sheet_name,
+            column,
+            operation,
+            documents_repo,
+            group_by_column,
+            filter_column,
+            filter_value,
+            top_n,
+        )
         return {"status": "success", "result": result}
     except (ColumnNotFoundError, TypeError) as exc:
         return {"status": "error", "error_type": type(exc).__name__, "message": str(exc)}

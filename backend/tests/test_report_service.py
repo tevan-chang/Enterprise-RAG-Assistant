@@ -131,7 +131,15 @@ async def test_run_report_tool_calling_executes_compute_table_metric_then_return
         }
     ]
     fake_compute.assert_awaited_once_with(
-        tenant_id="tenant_a", document_id="doc-1", sheet_name="業績", column="業績 (NT$)", operation="sum"
+        tenant_id="tenant_a",
+        document_id="doc-1",
+        sheet_name="業績",
+        column="業績 (NT$)",
+        operation="sum",
+        group_by_column=None,
+        filter_column=None,
+        filter_value=None,
+        top_n=5,
     )
     assert client.chat.completions.create.await_count == 2
 
@@ -145,6 +153,54 @@ async def test_run_report_tool_calling_executes_compute_table_metric_then_return
     assert len(tool_messages) == 1
     assert json.loads(tool_messages[0]["content"]) == {"status": "success", "result": 400000.0}
     assert tool_messages[0]["tool_call_id"] == "call-1"
+
+
+async def test_run_report_tool_calling_forwards_group_by_column_to_compute_table_metric():
+    tool_call = _FakeToolCall(
+        "call-1",
+        "compute_table_metric",
+        json.dumps(
+            {
+                "document_id": "doc-1",
+                "sheet_name": "業績",
+                "column": "業績 (NT$)",
+                "operation": "sum",
+                "group_by_column": "業務",
+            }
+        ),
+    )
+    first_response = _FakeResponse(_FakeMessage(content=None, tool_calls=[tool_call]))
+    second_response = _FakeResponse(_FakeMessage(content="依業務加總完成"))
+    client = _client_with_responses(first_response, second_response)
+
+    fake_compute = AsyncMock(
+        return_value={"status": "success", "result": {"王小明": 120000.0, "李小華": 80000.0}}
+    )
+
+    with (
+        patch(f"{_MODULE}._get_client", return_value=client),
+        patch(f"{_MODULE}.build_xlsx_schema_summary", return_value=[{"document_id": "doc-1"}]),
+        patch(f"{_MODULE}.compute_table_metric", new=fake_compute),
+    ):
+        result = await run_report_tool_calling(
+            query="依業務加總業績", tenant_id="tenant_a", role="admin", user_id="user-1"
+        )
+
+    fake_compute.assert_awaited_once_with(
+        tenant_id="tenant_a",
+        document_id="doc-1",
+        sheet_name="業績",
+        column="業績 (NT$)",
+        operation="sum",
+        group_by_column="業務",
+        filter_column=None,
+        filter_value=None,
+        top_n=5,
+    )
+    assert result["tool_calls"][0]["result"] == {
+        "status": "success",
+        "result": {"王小明": 120000.0, "李小華": 80000.0},
+    }
 
 
 async def test_run_report_tool_calling_sums_usage_across_two_rounds(_mock_record_usage):

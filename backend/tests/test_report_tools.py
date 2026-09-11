@@ -136,6 +136,217 @@ async def test_compute_table_metric_cross_tenant_document_returns_structured_err
     }
 
 
+async def test_compute_table_metric_group_by_sum_returns_grouped_list():
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = _doc()
+
+    result = await compute_table_metric(
+        tenant_id="tenant_a",
+        document_id="doc-1",
+        sheet_name="業績",
+        column="業績 (NT$)",
+        operation="sum",
+        group_by_column="業務",
+        documents_repo=documents_repo,
+    )
+
+    assert result == {
+        "status": "success",
+        "result": {
+            "groups": [
+                {"group": "陳大文", "value": 200000.0, "share": 0.5},
+                {"group": "王小明", "value": 120000.0, "share": 0.3},
+                {"group": "李小華", "value": 80000.0, "share": 0.2},
+            ],
+            "filter": None,
+        },
+    }
+
+
+async def test_compute_table_metric_group_by_count_returns_grouped_list():
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = _doc()
+
+    result = await compute_table_metric(
+        tenant_id="tenant_a",
+        document_id="doc-1",
+        sheet_name="業績",
+        column="備註",
+        operation="count",
+        group_by_column="業務",
+        documents_repo=documents_repo,
+    )
+
+    assert result == {
+        "status": "success",
+        "result": {
+            "groups": [
+                {"group": "王小明", "value": 1, "share": 0.5},
+                {"group": "陳大文", "value": 1, "share": 0.5},
+                {"group": "李小華", "value": 0, "share": 0.0},
+            ],
+            "filter": None,
+        },
+    }
+
+
+async def test_compute_table_metric_filter_only_returns_flat_result():
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = _doc()
+
+    result = await compute_table_metric(
+        tenant_id="tenant_a",
+        document_id="doc-1",
+        sheet_name="業績",
+        column="業績 (NT$)",
+        operation="sum",
+        filter_column="業務",
+        filter_value="王小明",
+        documents_repo=documents_repo,
+    )
+
+    assert result == {"status": "success", "result": 120000.0}
+
+
+async def test_compute_table_metric_filter_and_group_by_combined():
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = _doc(
+        xlsx_sheets=sheets_to_json(
+            [
+                _sheet_frame(
+                    "業績",
+                    pd.DataFrame(
+                        {
+                            "業務": ["王小明", "李小華", "陳大文", "王小明"],
+                            "業績 (NT$)": [120000, 80000, 200000, 60000],
+                            "商機階段": ["已成交", "已成交", "已成交", "初步接觸"],
+                        }
+                    ),
+                )
+            ]
+        )
+    )
+
+    result = await compute_table_metric(
+        tenant_id="tenant_a",
+        document_id="doc-1",
+        sheet_name="業績",
+        column="業績 (NT$)",
+        operation="sum",
+        filter_column="商機階段",
+        filter_value="已成交",
+        group_by_column="業務",
+        documents_repo=documents_repo,
+    )
+
+    assert result == {
+        "status": "success",
+        "result": {
+            "groups": [
+                {"group": "陳大文", "value": 200000.0, "share": 0.5},
+                {"group": "王小明", "value": 120000.0, "share": 0.3},
+                {"group": "李小華", "value": 80000.0, "share": 0.2},
+            ],
+            "filter": {"column": "商機階段", "value": "已成交"},
+        },
+    }
+
+
+async def test_compute_table_metric_real_xlsx_filter_and_group_by_top_n():
+    """用真實測試檔驗證篩選+分組組合（見 test_schema_first_summary_uses_far_fewer_tokens_than_full_table
+    的相同讀檔方式），篩「商機階段=已成交」再依「產業別」加總「預估金額 (NT$)」。
+    """
+    sheets = extract_xlsx_sheets(_TEST_XLSX.read_bytes())
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = {
+        "id": "doc-real",
+        "tenant_id": "tenant_a",
+        "file_name": "restricted_sales_pipeline_60rows.xlsx",
+        "xlsx_sheets": sheets_to_json(sheets),
+    }
+
+    result = await compute_table_metric(
+        tenant_id="tenant_a",
+        document_id="doc-real",
+        sheet_name=sheets[0].sheet_name,
+        column="預估金額 (NT$)",
+        operation="sum",
+        filter_column="商機階段",
+        filter_value="已成交",
+        group_by_column="產業別",
+        documents_repo=documents_repo,
+    )
+
+    assert result == {
+        "status": "success",
+        "result": {
+            "groups": [
+                {"group": "製造", "value": 13490000.0, "share": 0.2765},
+                {"group": "教育", "value": 12760000.0, "share": 0.2616},
+                {"group": "金融", "value": 11520000.0, "share": 0.2362},
+                {"group": "零售", "value": 11010000.0, "share": 0.2257},
+            ],
+            "filter": {"column": "商機階段", "value": "已成交"},
+        },
+    }
+    assert round(sum(g["share"] for g in result["result"]["groups"]), 4) == 1.0
+
+
+async def test_compute_table_metric_group_by_min_returns_type_error():
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = _doc()
+
+    result = await compute_table_metric(
+        tenant_id="tenant_a",
+        document_id="doc-1",
+        sheet_name="業績",
+        column="業績 (NT$)",
+        operation="min",
+        group_by_column="業務",
+        documents_repo=documents_repo,
+    )
+
+    assert result["status"] == "error"
+    assert result["error_type"] == "TypeError"
+
+
+async def test_compute_table_metric_unknown_filter_column_returns_structured_error():
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = _doc()
+
+    result = await compute_table_metric(
+        tenant_id="tenant_a",
+        document_id="doc-1",
+        sheet_name="業績",
+        column="業績 (NT$)",
+        operation="sum",
+        filter_column="不存在的篩選欄位",
+        filter_value="x",
+        documents_repo=documents_repo,
+    )
+
+    assert result["status"] == "error"
+    assert result["error_type"] == "ColumnNotFoundError"
+
+
+async def test_compute_table_metric_unknown_group_by_column_returns_structured_error():
+    documents_repo = MagicMock()
+    documents_repo.get.return_value = _doc()
+
+    result = await compute_table_metric(
+        tenant_id="tenant_a",
+        document_id="doc-1",
+        sheet_name="業績",
+        column="業績 (NT$)",
+        operation="sum",
+        group_by_column="不存在的分組欄位",
+        documents_repo=documents_repo,
+    )
+
+    assert result["status"] == "error"
+    assert result["error_type"] == "ColumnNotFoundError"
+
+
 async def test_compute_table_metric_unsupported_operation_returns_type_error():
     documents_repo = MagicMock()
     documents_repo.get.return_value = _doc()

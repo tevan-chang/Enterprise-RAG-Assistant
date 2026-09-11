@@ -4,9 +4,11 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAuth } from "@/lib/auth-context";
 import { generateReport, type ReportToolCall } from "@/lib/api";
@@ -18,25 +20,25 @@ type ToolResult = {
   error_type?: string;
 };
 
-/** 結果欄位依 tool 種類做不同摘要：compute_table_metric 是單一數值，query_documents 是命中列表。 */
-function formatToolResult(toolCall: ReportToolCall): string {
-  const result = toolCall.result as ToolResult;
-  if (result.status === "error") {
-    return `⚠️ ${result.error_type ?? "錯誤"}：${result.message ?? "執行失敗"}`;
+type DocumentHit = { label?: unknown; content?: unknown };
+
+type MetricGroup = { group: string; value: number; share: number };
+
+type GroupedMetricPayload = {
+  groups: MetricGroup[];
+  filter: { column: string; value: string } | null;
+};
+
+/** compute_table_metric 帶 group_by_column 時，result 是 { groups, filter } 結構而非單一數值。 */
+function isGroupedMetricPayload(value: unknown): value is GroupedMetricPayload {
+  return typeof value === "object" && value !== null && Array.isArray((value as { groups?: unknown }).groups);
+}
+
+function hitLabel(hit: unknown, fallbackIndex: number): string {
+  if (typeof hit === "object" && hit !== null && "label" in hit) {
+    return String((hit as DocumentHit).label);
   }
-  if (toolCall.tool === "compute_table_metric") {
-    return String(result.result);
-  }
-  if (Array.isArray(result.result)) {
-    return result.result
-      .map((hit) =>
-        typeof hit === "object" && hit !== null && "label" in hit
-          ? String((hit as { label: unknown }).label)
-          : JSON.stringify(hit),
-      )
-      .join("、");
-  }
-  return JSON.stringify(result.result);
+  return `結果 ${fallbackIndex + 1}`;
 }
 
 function formatToolArguments(toolCall: ReportToolCall): string {
@@ -48,6 +50,85 @@ function formatToolArguments(toolCall: ReportToolCall): string {
   } catch {
     return toolCall.arguments;
   }
+}
+
+/** tool call 執行狀態徽章：取代舊版把 ⚠️ 塞進結果字串前綴的做法，比照 documents 頁的狀態 Badge 慣例。 */
+function ToolStatusBadge({ toolCall }: { toolCall: ReportToolCall }) {
+  const result = toolCall.result as ToolResult;
+  if (result.status === "error") {
+    return <Badge variant="destructive">失敗</Badge>;
+  }
+  return <Badge className="bg-emerald-100 text-emerald-700">成功</Badge>;
+}
+
+/** 結果欄位依 tool 種類與資料形狀分流渲染，取代舊版一律壓成單行字串（對物件呼叫 String() 會印出
+ * "[object Object]"，新增 group_by_column 分組結果後必須改成結構化渲染）。
+ */
+function ToolResultCell({ toolCall }: { toolCall: ReportToolCall }) {
+  const result = toolCall.result as ToolResult;
+
+  if (result.status === "error") {
+    return (
+      <span className="text-xs text-destructive" title={result.error_type}>
+        {result.message ?? "執行失敗"}
+      </span>
+    );
+  }
+
+  if (toolCall.tool === "compute_table_metric") {
+    if (isGroupedMetricPayload(result.result)) {
+      const { groups, filter } = result.result;
+      return (
+        <div className="flex flex-col gap-1">
+          {filter && (
+            <div className="text-xs text-muted-foreground">
+              篩選條件：{filter.column} = {filter.value}
+            </div>
+          )}
+          <div className="flex flex-col gap-0.5">
+            {groups.map(({ group, value, share }) => (
+              <div key={group} className="text-xs">
+                {group}：{value.toLocaleString()}（{(share * 100).toFixed(1)}%）
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+    return <span className="text-xs">{Number(result.result).toLocaleString()}</span>;
+  }
+
+  if (Array.isArray(result.result)) {
+    const hits = result.result as DocumentHit[];
+    if (hits.length === 0) {
+      return <span className="text-xs text-muted-foreground">（無命中）</span>;
+    }
+    return (
+      <Popover>
+        <PopoverTrigger
+          render={
+            <Button variant="ghost" size="xs" className="h-auto whitespace-normal text-left font-mono">
+              {hits.map((hit, i) => hitLabel(hit, i)).join("、")}
+            </Button>
+          }
+        />
+        <PopoverContent className="w-96">
+          <div className="flex max-h-80 flex-col gap-3 overflow-y-auto">
+            {hits.map((hit, i) => (
+              <div key={i} className="text-xs">
+                <p className="font-medium">{hitLabel(hit, i)}</p>
+                <p className="whitespace-pre-wrap text-muted-foreground">
+                  {"content" in hit ? String(hit.content) : JSON.stringify(hit)}
+                </p>
+              </div>
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
+    );
+  }
+
+  return <span className="text-xs">{JSON.stringify(result.result)}</span>;
 }
 
 export default function ReportPage() {
@@ -126,6 +207,7 @@ export default function ReportPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>工具</TableHead>
+                      <TableHead>狀態</TableHead>
                       <TableHead>參數</TableHead>
                       <TableHead>結果</TableHead>
                     </TableRow>
@@ -134,10 +216,15 @@ export default function ReportPage() {
                     {reportMutation.data.tool_calls.map((toolCall, i) => (
                       <TableRow key={i}>
                         <TableCell className="font-mono text-xs">{toolCall.tool}</TableCell>
+                        <TableCell>
+                          <ToolStatusBadge toolCall={toolCall} />
+                        </TableCell>
                         <TableCell className="font-mono text-xs whitespace-pre-wrap">
                           {formatToolArguments(toolCall)}
                         </TableCell>
-                        <TableCell className="text-xs whitespace-pre-wrap">{formatToolResult(toolCall)}</TableCell>
+                        <TableCell className="text-xs whitespace-pre-wrap">
+                          <ToolResultCell toolCall={toolCall} />
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
