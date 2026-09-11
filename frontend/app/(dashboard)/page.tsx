@@ -75,6 +75,12 @@ export default function Home() {
         </p>
       )}
 
+      {usageQuery.isError && (
+        <p className="text-sm text-destructive">
+          用量資料載入失敗：{(usageQuery.error as Error).message}
+        </p>
+      )}
+
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatCard label="總文件數" value={stats.total} icon={FileStack} tone="primary" loading={documentsQuery.isLoading} />
         <StatCard label="已完成" value={stats.completed} icon={CheckCircle2} tone="emerald" loading={documentsQuery.isLoading} />
