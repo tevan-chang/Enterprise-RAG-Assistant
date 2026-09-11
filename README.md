@@ -1,11 +1,25 @@
 # Enterprise AI Knowledge & Report Assistant
 
+[![CI](https://github.com/tevan-chang/Enterprise-RAG-Assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/tevan-chang/Enterprise-RAG-Assistant/actions/workflows/ci.yml)
+
 企業級 RAG（Retrieval-Augmented Generation）知識問答助手：多租戶文件上傳解析、pgvector 向量檢索、雙模式問答（Chat / Report），搭配角色權限與分類鎖機制。
 
 完整規格請見：
 - [`docs/spec_v3.1.md`](docs/spec_v3.1.md) — 完整設計理由與規格
 - [`CLAUDE.md`](CLAUDE.md) — 每次開發都必須遵守的 Guardrail 與開發指令速查
 - [`docs/adr/`](docs/adr/) — 架構決策紀錄（ADR）
+
+## 功能特色
+
+- **多租戶隔離**：`tenant_id` 由 Supabase RLS 在 DB 層強制隔離，role-based／confidentiality 過濾則在 FastAPI 層做第二層檢查（雙層權限隔離）
+- **文件解析管線**：PDF（pdfplumber）／XLSX（pandas）自動解析、切分、向量化，解析異常自動 fallback 到 LlamaParse
+- **雙模式問答**：
+  - **Chat**：SSE 串流回應，附來源標註（citation）可點擊查看原文位置
+  - **Report Mode**：bounded tool-calling（固定 1-2 輪），支援語意檢索與 XLSX 精確數值運算（sum/average/min/max/count），並可在單次呼叫內完成「篩選 + 分組統計 + Top-N」
+- **AI 自動分類 + 雙軌分類鎖**：上傳後自動打分類標籤，人工複核後鎖定（`pending_auto → auto_labeled → manually_verified`），內容變更但已鎖定時觸發 Gmail 通知
+- **Token 用量追蹤**：即時累計 chat/report/embedding/classification 四類呼叫的 token 用量與估算成本
+- **外部 Cron 驅動同步**：不用應用內常駐 Scheduler，改由 GitHub Actions 定時觸發增量同步與孤兒任務清理
+- **分層測試策略**：pgTAP（RLS/RBAC）＋ Pytest（API 合約）＋ Playwright（1 條上傳 Happy Path E2E）
 
 ## 技術棧
 
