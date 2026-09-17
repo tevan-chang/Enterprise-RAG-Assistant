@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { SUPABASE_AUTH_COOKIE_NAME } from "@/lib/supabase/client";
 
-const PUBLIC_PATHS = ["/login"];
+const PUBLIC_PATHS = ["/login", "/privacy"];
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
