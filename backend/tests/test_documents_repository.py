@@ -75,3 +75,27 @@ def test_reorganize_omits_departments_and_confidentiality_when_not_provided():
     update_payload = client.table.return_value.update.call_args.args[0]
     assert "departments" not in update_payload
     assert "confidentiality" not in update_payload
+
+
+def test_create_includes_confidentiality_when_provided():
+    """DoD：上傳時使用者明確選擇機密等級（見 routers/documents.py upload_document），
+    insert payload 必須包含該欄位（見 spec §4.2：機密等級是人工專屬欄位，不做檔名/內容推斷）。
+    """
+    repo, client = _repo_with_mock_client()
+    client.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[{"id": "doc-1"}])
+
+    repo.create("tenant_a", "report.pdf", confidentiality="restricted")
+
+    insert_payload = client.table.return_value.insert.call_args.args[0]
+    assert insert_payload["confidentiality"] == "restricted"
+
+
+def test_create_omits_confidentiality_when_not_provided():
+    """DoD 關鍵斷言：不帶 confidentiality 時 payload 不可包含該 key，交由 DB 預設值 'internal' 處理。"""
+    repo, client = _repo_with_mock_client()
+    client.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[{"id": "doc-1"}])
+
+    repo.create("tenant_a", "report.pdf")
+
+    insert_payload = client.table.return_value.insert.call_args.args[0]
+    assert "confidentiality" not in insert_payload

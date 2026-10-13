@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 
@@ -15,13 +15,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useAuth } from "@/lib/auth-context";
 import { useUploadModal } from "@/lib/upload-modal-context";
+import { CONFIDENTIALITY_LABEL, isDocumentFullyResolved } from "@/lib/document-status";
 import {
   ApiError,
   getDocumentStatus,
   reuploadDocument,
   uploadDocument,
+  type Confidentiality,
   type ProcessingStatus,
 } from "@/lib/api";
 
@@ -46,8 +55,6 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "發生未知錯誤";
 }
 
-const TERMINAL_STATUSES = new Set<ProcessingStatus>(["completed", "failed"]);
-
 const STATUS_LABEL: Record<ProcessingStatus, string> = {
   parsing: "解析中",
   chunking: "切分段落中",
@@ -56,18 +63,27 @@ const STATUS_LABEL: Record<ProcessingStatus, string> = {
   failed: "失敗",
 };
 
+/** auto_classify() 失敗時刻意把 classification_status 永遠留在 pending_auto、不重試
+ * （見 backend/app/services/classification.py docstring），所以等分類收斂不能無限等待——
+ * 超過這個 tick 數（2 秒一次，20 秒）就放棄等待，直接視為完成，避免分類永久失敗時
+ * modal 卡住無限輪詢。分類本身只是一次 LLM 呼叫，正常應在數秒內完成，20 秒已足夠寬裕。 */
+const CLASSIFICATION_MAX_WAIT_TICKS = 10;
+
 export function UploadDocumentModal() {
   const { isOpen, close } = useUploadModal();
   const { session } = useAuth();
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
+  const [confidentiality, setConfidentiality] = useState<Confidentiality>("internal");
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [conflict, setConflict] = useState<FilenameConflict | null>(null);
+  const [classificationTimedOut, setClassificationTimedOut] = useState(false);
+  const classificationWaitTicksRef = useRef(0);
 
   const uploadMutation = useMutation({
     mutationFn: (options?: { force?: boolean }) => {
       if (!file) throw new Error("請先選擇檔案");
-      return uploadDocument(file, session!.access_token, options);
+      return uploadDocument(file, session!.access_token, { ...options, confidentiality });
     },
     onSuccess: (data) => {
       setConflict(null);
@@ -97,21 +113,35 @@ export function UploadDocumentModal() {
     queryFn: () => getDocumentStatus(documentId as string, session!.access_token),
     enabled: documentId !== null && !!session,
     refetchInterval: (query) => {
-      const status = query.state.data?.processing_status;
-      if (status && TERMINAL_STATUSES.has(status)) {
+      const data = query.state.data;
+      if (data && isDocumentFullyResolved(data)) {
         queryClient.invalidateQueries({ queryKey: ["documents"] });
         return false;
+      }
+      if (data?.processing_status === "completed" && data.classification_status === "pending_auto") {
+        classificationWaitTicksRef.current += 1;
+        if (classificationWaitTicksRef.current >= CLASSIFICATION_MAX_WAIT_TICKS) {
+          setClassificationTimedOut(true);
+          queryClient.invalidateQueries({ queryKey: ["documents"] });
+          return false;
+        }
       }
       return 2000;
     },
   });
 
   const status = statusQuery.data?.processing_status;
+  const classificationStatus = statusQuery.data?.classification_status;
+  const isResolved = (statusQuery.data && isDocumentFullyResolved(statusQuery.data)) || classificationTimedOut;
+  const isClassifying = status === "completed" && classificationStatus === "pending_auto" && !classificationTimedOut;
 
   function resetState() {
     setFile(null);
+    setConfidentiality("internal");
     setDocumentId(null);
     setConflict(null);
+    setClassificationTimedOut(false);
+    classificationWaitTicksRef.current = 0;
     uploadMutation.reset();
     reuploadMutation.reset();
   }
@@ -140,8 +170,26 @@ export function UploadDocumentModal() {
             type="file"
             accept=".pdf,.xlsx"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            disabled={uploadMutation.isPending}
+            disabled={uploadMutation.isPending || !!documentId}
           />
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">機密等級</span>
+            <Select
+              value={confidentiality}
+              onValueChange={(value) => setConfidentiality(value as Confidentiality)}
+              disabled={uploadMutation.isPending || !!documentId}
+            >
+              <SelectTrigger size="sm" className="w-full text-xs">
+                <SelectValue placeholder="機密等級" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="public">{CONFIDENTIALITY_LABEL.public}</SelectItem>
+                <SelectItem value="internal">{CONFIDENTIALITY_LABEL.internal}</SelectItem>
+                <SelectItem value="restricted">{CONFIDENTIALITY_LABEL.restricted}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
           {uploadMutation.isError && !conflict && (
             <p className="text-sm text-destructive">
@@ -182,14 +230,14 @@ export function UploadDocumentModal() {
 
           {documentId && (
             <div className="flex items-center gap-2 rounded-md border p-3 text-sm">
-              {status === "completed" && <CheckCircle2 className="size-4 text-green-600" />}
               {status === "failed" && <XCircle className="size-4 text-destructive" />}
-              {status && !TERMINAL_STATUSES.has(status) && (
+              {status === "completed" && isResolved && <CheckCircle2 className="size-4 text-green-600" />}
+              {status !== "failed" && !isResolved && (
                 <Loader2 className="size-4 animate-spin text-muted-foreground" />
               )}
               <span className="truncate">文件 ID：{documentId}</span>
               <Badge variant={status === "failed" ? "destructive" : "secondary"}>
-                {status ? STATUS_LABEL[status] : "查詢中"}
+                {isClassifying ? "分類中" : status ? STATUS_LABEL[status] : "查詢中"}
               </Badge>
             </div>
           )}

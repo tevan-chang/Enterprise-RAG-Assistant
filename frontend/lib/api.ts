@@ -11,6 +11,7 @@ export type DocumentUploadResponse = {
 export type DocumentStatusResponse = {
   document_id: string;
   processing_status: ProcessingStatus;
+  classification_status: ClassificationStatus;
   file_name: string;
   updated_at: string;
 };
@@ -126,11 +127,14 @@ async function request<T>(path: string, accessToken: string, init?: RequestInit)
 export function uploadDocument(
   file: File,
   accessToken: string,
-  options?: { force?: boolean },
+  options?: { force?: boolean; confidentiality?: Confidentiality },
 ): Promise<DocumentUploadResponse> {
   const formData = new FormData();
   formData.append("file", file);
-  const query = options?.force ? "?force=true" : "";
+  const params = new URLSearchParams();
+  if (options?.force) params.set("force", "true");
+  if (options?.confidentiality) params.set("confidentiality", options.confidentiality);
+  const query = params.toString() ? `?${params.toString()}` : "";
   return request<DocumentUploadResponse>(`/api/documents/upload${query}`, accessToken, {
     method: "POST",
     body: formData,

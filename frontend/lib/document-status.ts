@@ -1,4 +1,20 @@
-import type { DocumentListItem, ProcessingStatus } from "@/lib/api";
+import type { ClassificationStatus, Confidentiality, DocumentListItem, ProcessingStatus } from "@/lib/api";
+
+export const CONFIDENTIALITY_LABEL: Record<Confidentiality, string> = {
+  public: "公開",
+  internal: "內部",
+  restricted: "機密",
+};
+
+/** processing 進 completed 不代表分類也完成（見 services/document_pipeline.py 先 update_status
+ * 再 auto_classify 的執行順序），failed 不會有分類、不能卡住判斷。 */
+export function isDocumentFullyResolved(doc: {
+  processing_status: ProcessingStatus;
+  classification_status: ClassificationStatus;
+}): boolean {
+  if (doc.processing_status === "failed") return true;
+  return doc.processing_status === "completed" && doc.classification_status !== "pending_auto";
+}
 
 export const PROCESSING_STATUS_LABEL: Record<ProcessingStatus, string> = {
   parsing: "解析中",

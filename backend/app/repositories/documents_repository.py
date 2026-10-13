@@ -9,10 +9,22 @@ class DocumentsRepository:
     def __init__(self):
         self._client = get_supabase_client()
 
-    def create(self, tenant_id: str, file_name: str, file_content_hash: str | None = None) -> dict:
+    def create(
+        self,
+        tenant_id: str,
+        file_name: str,
+        file_content_hash: str | None = None,
+        confidentiality: str | None = None,
+    ) -> dict:
+        """`confidentiality` 由上傳者在上傳當下明確選擇（見 routers/documents.py upload_document），
+        None 代表沒有選擇，交由 DB 預設值 'internal' 處理（見 spec §4.2：機密等級是人工專屬欄位，
+        不屬於 auto_classify 的自動分類範圍，刻意不做檔名/內容推斷）。
+        """
         row = {"tenant_id": tenant_id, "file_name": file_name, "processing_status": "parsing"}
         if file_content_hash is not None:
             row["file_content_hash"] = file_content_hash
+        if confidentiality is not None:
+            row["confidentiality"] = confidentiality
         resp = self._client.table("documents").insert(row).execute()
         return resp.data[0]
 

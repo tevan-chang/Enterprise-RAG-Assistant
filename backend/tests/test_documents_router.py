@@ -121,6 +121,59 @@ def test_upload_pdf_triggers_background_task_with_correct_pipeline():
     }
 
 
+def test_upload_passes_through_confidentiality_query_param():
+    """使用者在上傳彈出視窗明確選擇機密等級時，必須原樣轉送給 repo.create()
+    （見 spec §4.2：機密等級是人工專屬欄位，不做檔名/內容推斷）。
+    """
+    repo = MagicMock()
+    repo.get_by_content_hash.return_value = None
+    repo.get_by_file_name.return_value = None
+    repo.create.return_value = {"id": "doc-1", "processing_status": "parsing"}
+    _as_user(role="editor", tenant_id="tenant_a")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository", return_value=repo),
+        patch.object(BackgroundTasks, "add_task"),
+    ):
+        resp = client.post(
+            "/api/documents/upload?confidentiality=restricted",
+            files={"file": ("a.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+
+    assert resp.status_code == 200
+    repo.create.assert_called_once_with(
+        tenant_id="tenant_a",
+        file_name="a.pdf",
+        file_content_hash=ANY,
+        confidentiality="restricted",
+    )
+
+
+def test_upload_omits_confidentiality_when_not_provided():
+    repo = MagicMock()
+    repo.get_by_content_hash.return_value = None
+    repo.get_by_file_name.return_value = None
+    repo.create.return_value = {"id": "doc-1", "processing_status": "parsing"}
+    _as_user(role="editor", tenant_id="tenant_a")
+
+    with (
+        patch(f"{_MODULE}.DocumentsRepository", return_value=repo),
+        patch.object(BackgroundTasks, "add_task"),
+    ):
+        resp = client.post(
+            "/api/documents/upload",
+            files={"file": ("a.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        )
+
+    assert resp.status_code == 200
+    repo.create.assert_called_once_with(
+        tenant_id="tenant_a",
+        file_name="a.pdf",
+        file_content_hash=ANY,
+        confidentiality=None,
+    )
+
+
 def test_upload_xlsx_triggers_background_task_with_correct_pipeline():
     repo = MagicMock()
     repo.get_by_content_hash.return_value = None
@@ -690,6 +743,7 @@ def test_get_status_scoped_to_own_tenant():
         "tenant_id": "tenant_a",
         "file_name": "a.pdf",
         "processing_status": "embedding",
+        "classification_status": "pending_auto",
         "updated_at": "2026-09-04T00:00:00+00:00",
     }
     _as_user(tenant_id="tenant_a")
@@ -699,6 +753,7 @@ def test_get_status_scoped_to_own_tenant():
 
     assert resp.status_code == 200
     assert resp.json()["processing_status"] == "embedding"
+    assert resp.json()["classification_status"] == "pending_auto"
 
 
 def test_get_status_without_authorization_header_returns_422():
