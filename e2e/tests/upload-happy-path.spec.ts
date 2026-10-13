@@ -27,17 +27,14 @@ test("上傳 PDF 後解析完成並顯示 AI 自動標籤", async ({ page }) => 
   await uploadDialog.getByRole("button", { name: "上傳" }).click();
 
   // 上傳 modal 內建 Polling（見 frontend/components/upload-document-modal.tsx），
-  // 狀態轉 completed/failed 前每 2 秒重打一次 /status。文件列表本身也可能在差不多
-  // 同時被 invalidate 出現同樣的「已完成」文字，斷言要限定在 dialog 範圍內避免
-  // Playwright strict mode 撞到兩個相符節點。
+  // 狀態轉 completed/failed 前每 2 秒重打一次 /status。modal 的「已完成」文字只在
+  // processing_status 與 classification_status 兩者都收斂後才顯示（isFullyResolved），
+  // 分類仍在跑時會先顯示「分類中」，所以看到「已完成」此時分類必定也已完成，
+  // 且 modal 在判定收斂的同一刻已呼叫 invalidateQueries(["documents"])，
+  // 不需要額外 reload 輪詢等文件列表的 Auto 標籤出現。斷言限定在 dialog 範圍內，
+  // 避免 Playwright strict mode 撞到文件列表裡同樣的「已完成」文字。
   await expect(uploadDialog.getByText("已完成")).toBeVisible({ timeout: 90_000 });
-
-  // 分類（auto_classify）在 processing_status 寫入 completed"之後"才觸發（見
-  // CLAUDE.md 自動分類章節），文件列表沒有自己的輪詢、只在上傳完成當下 invalidate 一次，
-  // 可能剛好搶在分類完成之前 refetch，所以用 reload 輪詢直到 Auto 標籤出現。
-  const autoLabelBadge = page.getByText("AI 自動標籤");
-  await expect(async () => {
-    await page.reload();
-    await expect(autoLabelBadge).toBeVisible();
-  }).toPass({ timeout: 60_000, intervals: [3_000] });
+  // invalidateQueries 只是標記 stale、觸發下一次 refetch，不是同步完成；多留一點餘裕
+  // 給 /api/documents 的網路往返與 React re-render，避免 CI 環境偶發延遲造成誤判為失敗。
+  await expect(page.getByText("AI 自動標籤")).toBeVisible({ timeout: 20_000 });
 });

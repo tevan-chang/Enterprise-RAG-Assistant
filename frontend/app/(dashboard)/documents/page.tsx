@@ -48,9 +48,11 @@ import { StatCard } from "@/components/stat-card";
 import { useAuth } from "@/lib/auth-context";
 import { useUploadModal } from "@/lib/upload-modal-context";
 import {
+  CONFIDENTIALITY_LABEL,
   PROCESSING_STATUS_LABEL,
   STATUS_BADGE_CLASS,
   deriveDocumentStats,
+  isDocumentFullyResolved,
 } from "@/lib/document-status";
 import {
   deleteDocument,
@@ -65,11 +67,9 @@ import {
 
 const EDITOR_ROLES = new Set(["admin", "editor"]);
 
-const CONFIDENTIALITY_LABEL: Record<string, string> = {
-  public: "公開",
-  internal: "內部",
-  restricted: "機密",
-};
+/** 與後端 zombie_task_timeout_minutes 預設值（10 分鐘）同量級：超過這個時間還沒收斂的
+ * 文件，不再繼續每 3 秒輪詢整頁，避免永久卡住的文件造成無限輪詢。 */
+const DOCUMENT_POLL_STALL_MS = 10 * 60 * 1000;
 
 const CONFIDENTIALITY_BADGE_CLASS: Record<string, string> = {
   public: "bg-emerald-100 text-emerald-700",
@@ -147,7 +147,7 @@ function ConfidentialityBadge({ confidentiality }: { confidentiality: string }) 
     <span
       className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs ${CONFIDENTIALITY_BADGE_CLASS[confidentiality] ?? "bg-muted text-muted-foreground"}`}
     >
-      {CONFIDENTIALITY_LABEL[confidentiality] ?? confidentiality}
+      {CONFIDENTIALITY_LABEL[confidentiality as Confidentiality] ?? confidentiality}
     </span>
   );
 }
@@ -390,6 +390,20 @@ export default function DocumentsPage() {
     queryKey: ["documents", session?.user.id],
     queryFn: () => listDocuments(session!.access_token),
     enabled: !!session,
+    refetchInterval: (query) => {
+      const docs = query.state.data ?? [];
+      const now = Date.now();
+      const hasInFlight = docs.some((d) => {
+        if (isDocumentFullyResolved(d)) return false;
+        // 分類失敗時 classification_status 會永遠卡在 pending_auto 不重試（見
+        // backend/app/services/classification.py auto_classify docstring）；zombie
+        // 任務（卡在 parsing/chunking/embedding）也只在下次 lifespan 啟動時才會被標記
+        // failed。兩者都用與後端 zombie_task_timeout_minutes 相同量級的時效上限，
+        // 避免永久卡住的文件讓整頁無限輪詢（見 CLAUDE.md Guardrail §2 規則 3）。
+        return now - new Date(d.updated_at).getTime() < DOCUMENT_POLL_STALL_MS;
+      });
+      return hasInFlight ? 3000 : false;
+    },
   });
 
   const documents = documentsQuery.data ?? [];

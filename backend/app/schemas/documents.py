@@ -11,6 +11,7 @@ class DocumentUploadResponse(BaseModel):
 class DocumentStatusResponse(BaseModel):
     document_id: str
     processing_status: str
+    classification_status: str
     file_name: str
     updated_at: str
 

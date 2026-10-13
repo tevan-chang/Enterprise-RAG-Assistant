@@ -1,4 +1,5 @@
 import hashlib
+from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
 
@@ -43,6 +44,7 @@ async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile,
     force: bool = False,
+    confidentiality: Literal["public", "internal", "restricted"] | None = None,
     user: UserContext = Depends(get_current_user),
 ):
     pipeline = _PIPELINE_BY_CONTENT_TYPE.get(file.content_type)
@@ -79,7 +81,10 @@ async def upload_document(
             )
 
     doc = documents_repo.create(
-        tenant_id=user.tenant_id, file_name=file.filename, file_content_hash=file_content_hash
+        tenant_id=user.tenant_id,
+        file_name=file.filename,
+        file_content_hash=file_content_hash,
+        confidentiality=confidentiality,
     )
 
     background_tasks.add_task(
@@ -181,6 +186,7 @@ async def get_document_status(document_id: str, user: UserContext = Depends(get_
     return DocumentStatusResponse(
         document_id=doc["id"],
         processing_status=doc["processing_status"],
+        classification_status=doc["classification_status"],
         file_name=doc["file_name"],
         updated_at=doc["updated_at"],
     )
